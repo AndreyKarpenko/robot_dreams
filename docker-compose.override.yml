@@ -1,0 +1,14 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    command: npm run start:dev
+    volumes:
+      - .:/app
+    ports:
+      - ${API_PORT}:${API_PORT}
+    depends_on:
+      postgres:
+        condition: service_healthy
