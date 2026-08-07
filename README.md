@@ -4,16 +4,26 @@ Express + PostgreSQL API у Docker (multi-stage образ).
 
 ## Запуск
 
-1. Переконайтесь, що в корені є файл `.env` (приклад змінних нижче).
-2. Підніміть сервіси:
+Підніміть сервіси однією командою (дефолтні змінні вже в `docker-compose.yml`, окремий `.env` не обов’язковий):
 
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
 
 API: `http://localhost:3000`  
 Healthcheck: `GET /health`  
-Користувачі: `GET /users`
+
+Перевірка health:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/health
+```
+
+Зупинка (volume БД зберігається):
+
+```bash
+docker compose down
+```
 
 Зупинка з видаленням volume БД:
 
@@ -21,7 +31,19 @@ Healthcheck: `GET /health`
 docker compose down -v
 ```
 
-### Змінні оточення (`.env`)
+### Dev override
+
+Файл `docker-compose.override.yml` підхоплюється автоматично: bind mount коду, `npm run start:dev` (hot-reload), порт назовні.
+
+Для CI (без override):
+
+```bash
+docker compose -f docker-compose.yml up -d --build
+```
+
+### Змінні оточення (опційно)
+
+Скопіюйте `.env.example` → `.env`, якщо потрібно перевизначити дефолти:
 
 ```env
 POSTGRES_HOST=postgres
@@ -31,6 +53,26 @@ POSTGRES_PASSWORD=123456
 POSTGRES_DB=robot_dream
 API_PORT=3000
 ```
+
+## Persistence Postgres
+
+Дані лежать у named volume `postgres_data` і переживають `docker compose down` (без `-v`). Перевірка:
+
+```bash
+# створити таблицю-маркер
+docker compose exec postgres \
+  psql -U user -d robot_dream -c "CREATE TABLE IF NOT EXISTS hw05_persist (id int); INSERT INTO hw05_persist VALUES (1);"
+
+# перезапуск без -v
+docker compose down
+docker compose up -d
+
+# таблиця на місці
+docker compose exec postgres \
+  psql -U user -d robot_dream -c "SELECT * FROM hw05_persist;"
+```
+
+Очікуваний результат другої команди `psql`: рядок з `id = 1`.
 
 ## Розмір Docker-образу
 
