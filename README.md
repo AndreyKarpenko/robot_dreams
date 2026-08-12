@@ -41,10 +41,6 @@ docker compose down -v
 docker compose -f docker-compose.yml up -d --build
 ```
 
-### Змінні оточення (опційно)
-
-Скопіюйте `.env.example` → `.env`, якщо потрібно перевизначити дефолти:
-
 ```env
 POSTGRES_HOST=postgres
 POSTGRES_PORT=5432

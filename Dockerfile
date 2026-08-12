@@ -12,6 +12,10 @@ RUN npm ci
 
 COPY . .
 
+ENV API_PORT=3000
+
+USER node
+
 RUN npm run build
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
@@ -31,6 +35,8 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
+
+ENV API_PORT=3000
 
 USER node
 
