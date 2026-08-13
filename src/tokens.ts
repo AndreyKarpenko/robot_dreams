@@ -9,4 +9,5 @@ export const PRISMA_SERVICE = Symbol('PRISMA_SERVICE') as Token<PrismaService>
 export const AUTH_SERVICE = Symbol('AUTH_SERVICE') as Token<AuthService>
 export const USER_SERVICE = Symbol('USER_SERVICE') as Token<UserService>
 
-export const INJECTABLE_METADATA = Symbol('INJECTABLE_METADATA') as Token<UserService>
+export const INJECTABLE_METADATA = Symbol('INJECTABLE_METADATA')
+export const INJECT_METADATA = Symbol('INJECT_METADATA')
