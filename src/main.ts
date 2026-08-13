@@ -4,8 +4,6 @@ import { APP_SERVICE, AUTH_SERVICE, USER_SERVICE, PRISMA_SERVICE } from './token
 import { AuthService, UserService, AppService, PrismaService } from './services'
 import { Container } from './container'
 
-import { Injectable } from './decorators/injectable'
-
 const container = new Container()
 
 container.register(PRISMA_SERVICE, PrismaService)
