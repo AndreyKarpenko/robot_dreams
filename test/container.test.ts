@@ -78,8 +78,6 @@ describe('IoC Container', () => {
     });
 
     it('throws a readable error for circular dependencies', () => {
-        // @Inject tokens avoid TDZ from design:paramtypes referencing a class
-        // that is not initialized yet (A <-> B forward reference).
         @Injectable()
         class A {
             constructor(@Inject('B') public readonly b: unknown) {}
@@ -87,11 +85,17 @@ describe('IoC Container', () => {
 
         @Injectable()
         class B {
+            constructor(@Inject('C') public readonly c: unknown) {}
+        }
+
+        @Injectable()
+        class C {
             constructor(@Inject('A') public readonly a: unknown) {}
         }
 
         container.register('A', A);
         container.register('B', B);
+        container.register('C', C);
 
         expect(() => container.resolve(A)).toThrowError(/A -> B -> A/);
 
