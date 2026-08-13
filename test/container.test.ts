@@ -97,7 +97,7 @@ describe('IoC Container', () => {
         container.register('B', B);
         container.register('C', C);
 
-        expect(() => container.resolve(A)).toThrowError(/A -> B -> A/);
+        expect(() => container.resolve(A)).toThrowError(/A -> B -> C -> A/);
 
         try {
             container.resolve(A);
@@ -105,6 +105,7 @@ describe('IoC Container', () => {
         } catch (error) {
             expect(error).toBeInstanceOf(Error);
             expect(error).not.toBeInstanceOf(RangeError);
+            expect((error as Error).message).toMatch(/A -> B -> C -> A/);
         }
     });
 });
