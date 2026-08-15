@@ -1,82 +1,27 @@
-# robot_dreams
+# mini-nest (part 1 — IoC)
 
-Express + PostgreSQL API у Docker (multi-stage образ).
+Власний IoC-контейнер у стилі NestJS: `@Injectable()`, резолв через `design:paramtypes`, `@Inject(token)`, скоупи `singleton` / `transient`, детекція циклів.
 
-## Запуск
-
-Підніміть сервіси однією командою (дефолтні змінні вже в `docker-compose.yml`, окремий `.env` не обов’язковий):
+## Як запустити
 
 ```bash
-docker compose up -d --build
+npm install
+npm test
 ```
 
-API: `http://localhost:3000`  
-Healthcheck: `GET /health`  
-
-Перевірка health:
+У Docker (образ із ДЗ #5, builder stage з override). Після зміни залежностей спочатку перезберіть образ:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/health
+docker compose build api
+docker compose run --rm api npm test
 ```
 
-Зупинка (volume БД зберігається):
+Локальний демо-запуск контейнера:
 
 ```bash
-docker compose down
+npm run start:dev
 ```
 
-Зупинка з видаленням volume БД:
+## Як це працює
 
-```bash
-docker compose down -v
-```
-
-### Dev override
-
-Файл `docker-compose.override.yml` підхоплюється автоматично: bind mount коду, `npm run start:dev` (hot-reload), порт назовні.
-
-Для CI (без override):
-
-```bash
-docker compose -f docker-compose.yml up -d --build
-```
-
-```env
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_USER=user
-POSTGRES_PASSWORD=123456
-POSTGRES_DB=robot_dream
-API_PORT=3000
-```
-
-## Persistence Postgres
-
-Дані лежать у named volume `postgres_data` і переживають `docker compose down` (без `-v`). Перевірка:
-
-```bash
-# створити таблицю-маркер
-docker compose exec postgres \
-  psql -U user -d robot_dream -c "CREATE TABLE IF NOT EXISTS hw05_persist (id int); INSERT INTO hw05_persist VALUES (1);"
-
-# перезапуск без -v
-docker compose down
-docker compose up -d
-
-# таблиця на місці
-docker compose exec postgres \
-  psql -U user -d robot_dream -c "SELECT * FROM hw05_persist;"
-```
-
-Очікуваний результат другої команди `psql`: рядок з `id = 1`.
-
-## Розмір Docker-образу
-
-Порівняння зібрано командою `docker images` (база `node:24-slim`):
-
-| Образ | Як зібрано | Розмір (`docker images`) |
-| --- | --- | --- |
-| multi-stage (фінальний) | поточний `Dockerfile` (builder + runner) | **377MB** |
-| single-stage («в лоб») | одна стадія: `npm ci` + build + runtime в одному шарі | **446MB** |
-
-Multi-stage менший, бо у фінальний образ потрапляють лише production-залежності (`npm ci --omit=dev`) і скомпільований `dist`, без TypeScript/devDependencies і зайвих артефактів збірки.
+TypeScript зі прапорцями `experimentalDecorators` і `emitDecoratorMetadata` під час компіляції записує типи параметрів конструктора в метадані Reflect під ключем `design:paramtypes`. Це відбувається **лише якщо на класі є хоча б один декоратор** — саме тому потрібен `@Injectable()`: він не лише маркує клас для контейнера, а й «вмикає» емісію метаданих. Без `emitDecoratorMetadata` ключ `design:paramtypes` не з’являється, і контейнер не може сам побудувати граф залежностей. Інтерфейси в рантаймі стираються до `Object`, тому для них потрібен явний `@Inject(token)` (Symbol або рядок): контейнер читає токен з окремих метаданих і резолвить провайдер за ним, а не за типом з `design:paramtypes`.

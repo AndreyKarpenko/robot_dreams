@@ -14,9 +14,9 @@ COPY . .
 
 ENV API_PORT=3000
 
-USER node
-
 RUN npm run build
+
+USER node
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:${API_PORT}/health || exit 1
@@ -43,4 +43,4 @@ USER node
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -f http://localhost:${API_PORT}/health || exit 1
 
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/main.js"]
