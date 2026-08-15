@@ -1,5 +1,5 @@
 import { Token, INJECTABLE_METADATA, INJECT_METADATA } from './tokens';
-import type { Scope } from './decorators/injectable';
+import type { Scope } from './decorators';
 
 type Constructor<T = unknown> = new (...args: any[]) => T;
 
@@ -26,10 +26,7 @@ export class Container {
         return this.resolve(provider) as T;
     }
 
-    public resolve<T>(
-        token: Constructor<T> | Token,
-        path: Set<Constructor> = new Set(),
-    ): T {
+    public resolve<T>(token: Constructor<T> | Token, path: Set<Constructor> = new Set()): T {
         let provider: Constructor;
 
         if (isToken(token)) {
@@ -51,8 +48,7 @@ export class Container {
         nextPath.add(provider);
 
         const metadata = Reflect.getMetadata(INJECTABLE_METADATA, provider) as
-            | { scope: Scope }
-            | undefined;
+            { scope: Scope } | undefined;
 
         if (!metadata) {
             const chain = [...path, provider].map((p) => p.name).join(' -> ');
@@ -66,14 +62,11 @@ export class Container {
         }
 
         const dependencies =
-            (Reflect.getMetadata('design:paramtypes', provider) as
-                | Constructor[]
-                | undefined) ?? [];
+            (Reflect.getMetadata('design:paramtypes', provider) as Constructor[] | undefined) ?? [];
 
         const injects =
             (Reflect.getOwnMetadata(INJECT_METADATA, provider) as
-                | Record<number, Token>
-                | undefined) ?? {};
+                Record<number, Token> | undefined) ?? {};
 
         const instances = dependencies.map((dependency, index) => {
             if (injects[index] !== undefined) {

@@ -1,16 +1,20 @@
-import 'reflect-metadata'
+import 'reflect-metadata';
 
-import { APP_SERVICE, AUTH_SERVICE, USER_SERVICE, PRISMA_SERVICE } from './tokens'
-import { AuthService, UserService, AppService, PrismaService } from './services'
-import { Container } from './container'
+import { APP_SERVICE, AUTH_SERVICE, USER_SERVICE, PRISMA_SERVICE } from './tokens';
+import { AuthService, UserService, AppService, PrismaService } from './services';
+import { Container } from './container';
+import { Router } from './router';
 
-const container = new Container()
+import { UserController } from './controllers/UserController';
 
-container.register(PRISMA_SERVICE, PrismaService)
-container.register(USER_SERVICE, UserService)
-container.register(AUTH_SERVICE, AuthService)
-container.register(APP_SERVICE, AppService)
+const container = new Container();
 
-const app = container.get(APP_SERVICE)
+container.register(PRISMA_SERVICE, PrismaService);
+container.register(USER_SERVICE, UserService);
+container.register(AUTH_SERVICE, AuthService);
+container.register(APP_SERVICE, AppService);
 
-app.start()
+const app = container.get(APP_SERVICE);
+const router = new Router([UserController]);
+
+app.start();
