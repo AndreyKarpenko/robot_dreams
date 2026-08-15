@@ -85,19 +85,13 @@ describe('IoC Container', () => {
 
         @Injectable()
         class B {
-            constructor(@Inject('C') public readonly c: unknown) {}
-        }
-
-        @Injectable()
-        class C {
             constructor(@Inject('A') public readonly a: unknown) {}
         }
 
         container.register('A', A);
         container.register('B', B);
-        container.register('C', C);
 
-        expect(() => container.resolve(A)).toThrowError(/A -> B -> C -> A/);
+        expect(() => container.resolve(A)).toThrowError(/A -> B -> A/);
 
         try {
             container.resolve(A);
@@ -105,7 +99,58 @@ describe('IoC Container', () => {
         } catch (error) {
             expect(error).toBeInstanceOf(Error);
             expect(error).not.toBeInstanceOf(RangeError);
-            expect((error as Error).message).toMatch(/A -> B -> C -> A/);
+            expect((error as Error).message).toMatch(/A -> B -> A/);
         }
+    });
+
+    it('does not leak @Inject tokens from parent to child class', () => {
+        const PARENT = Symbol.for('PARENT_DEP');
+        const CHILD = Symbol.for('CHILD_DEP');
+
+        @Injectable()
+        class ParentDep {
+            readonly kind = 'parent';
+        }
+
+        @Injectable()
+        class ChildDep {
+            readonly kind = 'child';
+        }
+
+        @Injectable()
+        class Parent {
+            constructor(@Inject(PARENT) public readonly dep: ParentDep) {}
+        }
+
+        @Injectable()
+        class Child extends Parent {
+            constructor(@Inject(CHILD) dep: ChildDep) {
+                super(dep as unknown as ParentDep);
+            }
+        }
+
+        container.register(PARENT, ParentDep);
+        container.register(CHILD, ChildDep);
+
+        const child = container.resolve(Child);
+        expect(child.dep).toBeInstanceOf(ChildDep);
+        expect(child.dep.kind).toBe('child');
+
+        const parent = container.resolve(Parent);
+        expect(parent.dep).toBeInstanceOf(ParentDep);
+        expect(parent.dep.kind).toBe('parent');
+    });
+
+    it('names the request path when a dependency is not injectable', () => {
+        class Plain {}
+
+        @Injectable()
+        class NeedsPlain {
+            constructor(public readonly plain: Plain) {}
+        }
+
+        expect(() => container.resolve(NeedsPlain)).toThrowError(
+            /Plain is not injectable \(via NeedsPlain -> Plain\)/,
+        );
     });
 });

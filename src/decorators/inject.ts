@@ -6,11 +6,11 @@ export function Inject(token: Token) {
         _propertyKey: string | symbol | undefined,
         parameterIndex: number,
     ) {
-        const injects =
-            Reflect.getMetadata(INJECT_METADATA, target) ??
+        const existing =
+            Reflect.getOwnMetadata(INJECT_METADATA, target) ??
             ({} as Record<number, Token>);
 
-        injects[parameterIndex] = token;
+        const injects = { ...existing, [parameterIndex]: token };
         Reflect.defineMetadata(INJECT_METADATA, injects, target);
     };
 }

@@ -55,7 +55,8 @@ export class Container {
             | undefined;
 
         if (!metadata) {
-            throw new Error(`${provider.name} is not injectable`);
+            const chain = [...path, provider].map((p) => p.name).join(' -> ');
+            throw new Error(`${provider.name} is not injectable (via ${chain})`);
         }
 
         const scope: Scope = metadata.scope ?? 'singleton';
@@ -70,7 +71,7 @@ export class Container {
                 | undefined) ?? [];
 
         const injects =
-            (Reflect.getMetadata(INJECT_METADATA, provider) as
+            (Reflect.getOwnMetadata(INJECT_METADATA, provider) as
                 | Record<number, Token>
                 | undefined) ?? {};
 
