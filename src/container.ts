@@ -1,7 +1,7 @@
 import { Token, INJECTABLE_METADATA, INJECT_METADATA } from './tokens';
 import type { Scope } from './decorators';
 
-type Constructor<T = unknown> = new (...args: any[]) => T;
+export type Constructor<T = unknown> = new (...args: any[]) => T;
 
 function isToken(value: unknown): value is Token {
     return typeof value === 'symbol' || typeof value === 'string';

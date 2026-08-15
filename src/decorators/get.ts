@@ -1,4 +1,4 @@
-export function Get(path: string) {
+export function Get(path?: string) {
     return (target: object, propertyKey: string | symbol, _descriptor: PropertyDescriptor) => {
         const metadata = Reflect.getMetadata('routes', target) ?? [];
 

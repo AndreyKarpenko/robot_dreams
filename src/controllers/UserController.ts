@@ -4,17 +4,22 @@ import { Get, Controller, Param, Query, Body, Post } from '../decorators';
 @Controller('users')
 export class UserController {
     @Get(':id')
-    getUser(@Param('red') id: string, @Query('sd') asd: string) {
+    getUser(@Body() body: any, @Param('id') id: string, @Query('sd') sd: string) {
+        return `User ${id} ${sd}`;
+    }
+
+    @Post(':bd')
+    getUse(@Body() body: string, @Param('bd') db: string) {
+        return `User ${JSON.stringify(body)}`;
+    }
+
+    @Post(':fac')
+    postUser(@Body() body: string, @Param('fac') id: string) {
         return 'User';
     }
 
-    @Get(':dsdfsdf')
-    getUse(@Body() body: string, @Param('id') id: string, @Param('dsdfsdf') dsdfsdf: string) {
-        return 'User';
-    }
-
-    @Post(':id')
-    postUser(@Body() body: string, @Param('id') id: string) {
-        return 'User';
+    @Get()
+    health() {
+        return { ok: true };
     }
 }
