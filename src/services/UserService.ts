@@ -1,4 +1,4 @@
-import { Injectable } from '../decorators/injectable';
+import { Injectable } from '../decorators';
 import { CreateUserDto } from '../dto/create-user.dto';
 
 @Injectable()

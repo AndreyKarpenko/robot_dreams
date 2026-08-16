@@ -4,7 +4,7 @@ import type { Server } from 'node:http';
 import { createApp } from '../src/app';
 import { UserController } from '../src/controllers/UserController';
 import { CreateUserDto } from '../src/dto/create-user.dto';
-import { UserService } from '../src/services/UserService';
+import { UserService } from '../src/services';
 
 async function listen(server: Server): Promise<string> {
     await new Promise<void>((resolve) => {
