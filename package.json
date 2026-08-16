@@ -1,7 +1,7 @@
 {
     "name": "robot_dreams",
     "version": "1.0.0",
-    "description": "Mini NestJS: custom IoC container (part 1)",
+    "description": "Mini NestJS: IoC container and HTTP layer on node:http (part 2)",
     "license": "ISC",
     "author": "",
     "type": "commonjs",

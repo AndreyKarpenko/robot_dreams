@@ -1,23 +1,36 @@
 import 'reflect-metadata';
 import { Constructor } from './container';
+import { RouteDefinition } from './decorators';
 
 type Route = {
     controller: Constructor;
     handler: string | symbol;
 };
 
+export type MatchedRoute = {
+    route: Route;
+    params: Record<string, string>;
+};
+
+function joinPath(prefix: string, path = ''): string {
+    const joined = [prefix, path].join('/').split('/').filter(Boolean).join('/');
+
+    return `/${joined}`;
+}
+
 export class Router {
     public routes = new Map<string, Route>();
 
     constructor(private controllers: Constructor[]) {
         this.controllers.forEach((controller) => {
-            const path = Reflect.getMetadata('path', controller);
-            const routes = Reflect.getMetadata('routes', controller.prototype);
+            const prefix = Reflect.getMetadata('path', controller) ?? '';
+            const routes: RouteDefinition[] =
+                Reflect.getMetadata('routes', controller.prototype) ?? [];
 
-            routes.forEach((route: { method: string; path: string; handler: string | symbol }) => {
-                const normalizedPath = route.path ? `/${path}/${route.path}` : `/${path}`;
+            routes.forEach((route) => {
+                const fullPath = joinPath(prefix, route.path);
 
-                this.routes.set(`${route.method} ${normalizedPath}`, {
+                this.routes.set(`${route.method} ${fullPath}`, {
                     controller,
                     handler: route.handler,
                 });
@@ -25,10 +38,8 @@ export class Router {
         });
     }
 
-    match(method: string, url: string) {
+    match(method: string, url: string): MatchedRoute | undefined {
         const pathname = url.split('?')[0];
-
-        // 1. Сначала ищем точное совпадение
         const exactRoute = this.routes.get(`${method} ${pathname}`);
 
         if (exactRoute) {
@@ -38,7 +49,6 @@ export class Router {
             };
         }
 
-        // 2. Если точного маршрута нет — ищем динамический
         for (const [path, route] of this.routes) {
             const [routeMethod, routePath] = path.split(' ');
 
@@ -57,9 +67,7 @@ export class Router {
 
             const matches = routeParts.every((part, index) => {
                 if (part.startsWith(':')) {
-                    const paramName = part.slice(1);
-                    params[paramName] = urlParts[index];
-
+                    params[part.slice(1)] = urlParts[index];
                     return true;
                 }
 

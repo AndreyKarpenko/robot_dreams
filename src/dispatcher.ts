@@ -1,12 +1,9 @@
-import { Router } from './router';
 import { IncomingMessage, ServerResponse } from 'node:http';
-import { Container } from './container';
-import { ValidationPipe } from './pipes/validation.pipe';
 
-type Parameter = {
-    type: 'param' | 'query' | 'body';
-    name?: string;
-};
+import { Container } from './container';
+import { RouteParamMetadata } from './decorators';
+import { ValidationException, ValidationPipe } from './pipes/validation.pipe';
+import { Router } from './router';
 
 export class Dispatcher {
     private validationPipe = new ValidationPipe();
@@ -16,35 +13,32 @@ export class Dispatcher {
         private container: Container,
     ) {}
 
-    async handle(req: IncomingMessage, res: ServerResponse) {
-        const result = this.router.match(req.method!, req.url!);
+    async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+        const result = this.router.match(req.method ?? 'GET', req.url ?? '/');
 
         if (!result) {
             res.statusCode = 404;
-            return res.end('404 Not Found');
+            res.end('404 Not Found');
+            return;
         }
 
         const { route, params } = result;
-
         const controller = this.container.resolve(route.controller) as Record<
             string | symbol,
-            (...args: any[]) => any
+            (...args: unknown[]) => unknown
         >;
 
-        const handler = controller[route.handler];
-
-        const parameters = Reflect.getMetadata('parameters', route.controller.prototype)?.[
-            route.handler
-        ] as Record<string, Parameter> | undefined;
-
-        const paramTypes = Reflect.getMetadata(
-            'design:paramtypes',
+        const parameters: Record<string, RouteParamMetadata> | undefined = Reflect.getMetadata(
+            'parameters',
             route.controller.prototype,
             route.handler,
         );
 
-        const url = new URL(req.url!, `http://${req.headers.host}`);
+        const paramTypes: unknown[] =
+            Reflect.getMetadata('design:paramtypes', route.controller.prototype, route.handler) ??
+            [];
 
+        const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
         const query: Record<string, string> = {};
 
         url.searchParams.forEach((value, key) => {
@@ -53,25 +47,22 @@ export class Dispatcher {
 
         let body: unknown;
 
-        if (parameters) {
-            const hasBody = Object.values(parameters).some(
-                (parameter) => parameter.type === 'body',
-            );
-
-            if (hasBody) {
-                const rawBody = await this.readBody(req);
-
-                body = rawBody ? JSON.parse(rawBody) : undefined;
-            }
-        }
-
         try {
+            if (
+                parameters &&
+                Object.values(parameters).some((parameter) => parameter.type === 'body')
+            ) {
+                const rawBody = await this.readBody(req);
+                body = rawBody ? JSON.parse(rawBody) : {};
+            }
+
             const args: unknown[] = [];
 
             if (parameters) {
                 for (const [index, parameter] of Object.entries(parameters)) {
                     const parameterIndex = Number(index);
-                    const metatype = paramTypes[parameterIndex];
+                    const metatype = paramTypes[parameterIndex] as
+                        (new (...args: unknown[]) => unknown) | undefined;
 
                     if (parameter.type === 'param') {
                         args[parameterIndex] = params[parameter.name!];
@@ -87,27 +78,29 @@ export class Dispatcher {
                 }
             }
 
-            const resultValue = await handler(...args);
+            const resultValue = await controller[route.handler](...args);
 
-            res.statusCode = 200;
+            res.statusCode = req.method === 'POST' ? 201 : 200;
             res.setHeader('Content-Type', 'application/json');
-
             res.end(JSON.stringify(resultValue));
         } catch (error) {
-            const errors = error as {
-                property: string;
-                constraints?: Record<string, string>;
-            }[];
+            if (error instanceof ValidationException) {
+                res.statusCode = 400;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(error.errors));
+                return;
+            }
 
-            res.statusCode = 400;
+            if (error instanceof SyntaxError) {
+                res.statusCode = 400;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ message: 'Invalid JSON' }));
+                return;
+            }
+
+            res.statusCode = 500;
             res.setHeader('Content-Type', 'application/json');
-
-            const response = errors.map((error) => ({
-                field: error.property,
-                constraints: error.constraints,
-            }));
-
-            return res.end(JSON.stringify(response));
+            res.end(JSON.stringify({ message: 'Internal Server Error' }));
         }
     }
 
