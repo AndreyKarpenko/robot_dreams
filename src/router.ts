@@ -26,6 +26,19 @@ export class Router {
     }
 
     match(method: string, url: string) {
+        const pathname = url.split('?')[0];
+
+        // 1. Сначала ищем точное совпадение
+        const exactRoute = this.routes.get(`${method} ${pathname}`);
+
+        if (exactRoute) {
+            return {
+                route: exactRoute,
+                params: {},
+            };
+        }
+
+        // 2. Если точного маршрута нет — ищем динамический
         for (const [path, route] of this.routes) {
             const [routeMethod, routePath] = path.split(' ');
 
@@ -34,7 +47,7 @@ export class Router {
             }
 
             const routeParts = routePath.split('/');
-            const urlParts = url.split('?')[0].split('/');
+            const urlParts = pathname.split('/');
 
             if (routeParts.length !== urlParts.length) {
                 continue;

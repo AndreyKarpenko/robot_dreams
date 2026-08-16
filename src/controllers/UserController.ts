@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { Get, Controller, Param, Query, Body, Post } from '../decorators';
+import { CreateUserDto } from '../dto/create-user.dto';
 
 @Controller('users')
 export class UserController {
@@ -21,5 +22,12 @@ export class UserController {
     @Get()
     health() {
         return { ok: true };
+    }
+
+    @Post('test')
+    createUser(@Body() body: CreateUserDto) {
+        console.log(body instanceof CreateUserDto);
+
+        return body;
     }
 }

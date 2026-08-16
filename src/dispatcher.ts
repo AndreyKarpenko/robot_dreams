@@ -1,6 +1,7 @@
 import { Router } from './router';
 import { IncomingMessage, ServerResponse } from 'node:http';
 import { Container } from './container';
+import { ValidationPipe } from './pipes/validation.pipe';
 
 type Parameter = {
     type: 'param' | 'query' | 'body';
@@ -8,6 +9,8 @@ type Parameter = {
 };
 
 export class Dispatcher {
+    private validationPipe = new ValidationPipe();
+
     constructor(
         private router: Router,
         private container: Container,
@@ -34,6 +37,12 @@ export class Dispatcher {
             route.handler
         ] as Record<string, Parameter> | undefined;
 
+        const paramTypes = Reflect.getMetadata(
+            'design:paramtypes',
+            route.controller.prototype,
+            route.handler,
+        );
+
         const url = new URL(req.url!, `http://${req.headers.host}`);
 
         const query: Record<string, string> = {};
@@ -56,32 +65,50 @@ export class Dispatcher {
             }
         }
 
-        const args: unknown[] = [];
+        try {
+            const args: unknown[] = [];
 
-        if (parameters) {
-            for (const [index, parameter] of Object.entries(parameters)) {
-                const parameterIndex = Number(index);
+            if (parameters) {
+                for (const [index, parameter] of Object.entries(parameters)) {
+                    const parameterIndex = Number(index);
+                    const metatype = paramTypes[parameterIndex];
 
-                if (parameter.type === 'param') {
-                    args[parameterIndex] = params[parameter.name!];
-                }
+                    if (parameter.type === 'param') {
+                        args[parameterIndex] = params[parameter.name!];
+                    }
 
-                if (parameter.type === 'query') {
-                    args[parameterIndex] = query[parameter.name!];
-                }
+                    if (parameter.type === 'query') {
+                        args[parameterIndex] = query[parameter.name!];
+                    }
 
-                if (parameter.type === 'body') {
-                    args[parameterIndex] = body;
+                    if (parameter.type === 'body') {
+                        args[parameterIndex] = await this.validationPipe.transform(body, metatype);
+                    }
                 }
             }
+
+            const resultValue = await handler(...args);
+
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'application/json');
+
+            res.end(JSON.stringify(resultValue));
+        } catch (error) {
+            const errors = error as {
+                property: string;
+                constraints?: Record<string, string>;
+            }[];
+
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+
+            const response = errors.map((error) => ({
+                field: error.property,
+                constraints: error.constraints,
+            }));
+
+            return res.end(JSON.stringify(response));
         }
-
-        const resultValue = await handler(...args);
-
-        res.statusCode = 200;
-        res.setHeader('Content-Type', 'application/json');
-
-        res.end(JSON.stringify(resultValue));
     }
 
     private readBody(req: IncomingMessage): Promise<string> {
