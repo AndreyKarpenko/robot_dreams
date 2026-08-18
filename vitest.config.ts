@@ -1,7 +1,11 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+    cacheDir: join(tmpdir(), 'vite-robot-dreams'),
     plugins: [
         swc.vite({
             jsc: {

@@ -1,19 +1,19 @@
 services:
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: builder
-    command: npm run start:dev
-    volumes:
-      - ./src:/app/src
-      - ./test:/app/test
-      - ./package.json:/app/package.json
-      - ./package-lock.json:/app/package-lock.json
-      - ./tsconfig.json:/app/tsconfig.json
-      - ./vitest.config.ts:/app/vitest.config.ts
-    ports:
-      - "${API_PORT:-3000}:${API_PORT:-3000}"
-    depends_on:
-      postgres:
-        condition: service_healthy
+    api:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: builder
+        command: npm run start:dev
+        volumes:
+            - ./src:/app/src
+            - ./test:/app/test
+            - ./package.json:/app/package.json
+            - ./package-lock.json:/app/package-lock.json
+            - ./tsconfig.json:/app/tsconfig.json
+            - ./vitest.config.ts:/app/vitest.config.ts
+        ports:
+            - '${API_PORT:-3000}:${API_PORT:-3000}'
+        depends_on:
+            postgres:
+                condition: service_healthy
