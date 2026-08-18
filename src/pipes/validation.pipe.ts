@@ -34,7 +34,7 @@ export class ValidationPipe {
         }
 
         const instance = plainToInstance(metatype, value);
-        const errors = await validate(instance as object);
+        const errors = await validate(instance as object, { whitelist: true });
 
         if (errors.length > 0) {
             throw new ValidationException(flattenErrors(errors));

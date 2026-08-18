@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Server } from 'node:http';
+import { request as httpRequest, type IncomingMessage, type Server } from 'node:http';
+import { PassThrough } from 'node:stream';
 
 import { createApp } from '../src/app';
 import { UserController } from '../src/controllers/UserController';
+import { Dispatcher } from '../src/dispatcher';
 import { CreateUserDto } from '../src/dto/create-user.dto';
 import { UserService } from '../src/services';
 
@@ -140,4 +142,84 @@ describe('HTTP dispatcher', () => {
         expect(controller.userService).toBe(service);
         expect(service).toBe(app.container.resolve(UserService));
     });
+
+    it('decodes percent-encoded @Param values', async () => {
+        const app = createApp();
+        server = app.server;
+        const baseUrl = await listen(server);
+        const encoded = encodeURIComponent('Іван Петров');
+
+        const response = await nodeRequest(baseUrl, `/users/${encoded}`);
+
+        expect(response.status).toBe(200);
+        expect(JSON.parse(response.body)).toEqual({ id: 'Іван Петров' });
+    });
+
+    it('strips undeclared DTO fields before the handler', async () => {
+        const app = createApp();
+        server = app.server;
+        const baseUrl = await listen(server);
+
+        const response = await fetch(`${baseUrl}/users`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'user@example.com', isAdmin: true }),
+        });
+
+        expect(response.status).toBe(201);
+
+        const created = app.container.resolve(UserService).created[0] as CreateUserDto & {
+            isAdmin?: boolean;
+        };
+
+        expect(created).toBeInstanceOf(CreateUserDto);
+        expect(created.email).toBe('user@example.com');
+        expect(created).not.toHaveProperty('isAdmin');
+    });
+
+    it('reassembles a UTF-8 body split across chunks', async () => {
+        const json = JSON.stringify({ name: 'Ярослав' });
+        const buffer = Buffer.from(json, 'utf8');
+        const splitAt = buffer.indexOf(Buffer.from('Я', 'utf8')) + 1;
+        const req = new PassThrough();
+
+        expect(splitAt).toBeGreaterThan(1);
+        const dispatcher = new Dispatcher({} as never, {} as never);
+        const bodyPromise = (
+            dispatcher as unknown as { readBody(req: IncomingMessage): Promise<string> }
+        ).readBody(req as unknown as IncomingMessage);
+
+        req.write(buffer.subarray(0, splitAt));
+        req.write(buffer.subarray(splitAt));
+        req.end();
+
+        expect(JSON.parse(await bodyPromise)).toEqual({ name: 'Ярослав' });
+    });
 });
+
+function nodeRequest(baseUrl: string, path: string): Promise<{ status: number; body: string }> {
+    return new Promise((resolve, reject) => {
+        const parsed = new URL(baseUrl);
+        const req = httpRequest(
+            {
+                hostname: parsed.hostname,
+                port: parsed.port,
+                path,
+                method: 'GET',
+            },
+            (res) => {
+                const chunks: Buffer[] = [];
+                res.on('data', (chunk) => chunks.push(chunk));
+                res.on('end', () =>
+                    resolve({
+                        status: res.statusCode ?? 0,
+                        body: Buffer.concat(chunks).toString('utf8'),
+                    }),
+                );
+            },
+        );
+
+        req.on('error', reject);
+        req.end();
+    });
+}

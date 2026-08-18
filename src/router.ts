@@ -67,7 +67,7 @@ export class Router {
 
             const matches = routeParts.every((part, index) => {
                 if (part.startsWith(':')) {
-                    params[part.slice(1)] = urlParts[index];
+                    params[part.slice(1)] = decodeURIComponent(urlParts[index]);
                     return true;
                 }
 
