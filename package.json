@@ -1,7 +1,7 @@
 {
     "name": "robot_dreams",
     "version": "1.0.0",
-    "description": "Mini NestJS: IoC container and HTTP layer on node:http (part 2)",
+    "description": "Mini NestJS: IoC container, HTTP layer and full request lifecycle on node:http (part 3)",
     "license": "ISC",
     "author": "",
     "type": "commonjs",
@@ -15,10 +15,9 @@
         "format:check": "prettier --check ."
     },
     "dependencies": {
-        "class-transformer": "^0.5.1",
-        "class-validator": "^0.15.1",
         "dotenv": "^17.4.2",
-        "reflect-metadata": "^0.2.2"
+        "reflect-metadata": "^0.2.2",
+        "zod": "^4.4.3"
     },
     "devDependencies": {
         "@swc/core": "^1.15.47",

@@ -1,5 +1,7 @@
-import { Body, Controller, Get, Param, Post, Query } from '../decorators';
-import { CreateUserDto } from '../dto/create-user.dto';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '../decorators';
+import { createUserSchema, type CreateUserDto } from '../dto/create-user.dto';
+import { AuthGuard } from '../guards/auth.guard';
+import { ZodValidationPipe } from '../pipes/zod-validation.pipe';
 import { UserService } from '../services';
 
 @Controller('users')
@@ -17,7 +19,8 @@ export class UserController {
     }
 
     @Post()
-    create(@Body() dto: CreateUserDto) {
+    @UseGuards(AuthGuard)
+    create(@Body(new ZodValidationPipe(createUserSchema)) dto: CreateUserDto) {
         return this.userService.create(dto);
     }
 }

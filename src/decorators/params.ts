@@ -1,41 +1,46 @@
-export type RouteParamType = 'body' | 'param' | 'query';
+import type { PipeRef, RouteParamType } from '../lifecycle';
+
+export type { RouteParamType };
 
 export type RouteParamMetadata = {
     type: RouteParamType;
     name?: string;
+    pipes: PipeRef[];
 };
 
-function createParamDecorator(type: RouteParamType) {
-    return (name?: string): ParameterDecorator => {
-        return (target, propertyKey, parameterIndex) => {
-            if (propertyKey === undefined) {
-                return;
-            }
+function createParamDecorator(
+    type: RouteParamType,
+    name: string | undefined,
+    pipes: PipeRef[],
+): ParameterDecorator {
+    return (target, propertyKey, parameterIndex) => {
+        if (propertyKey === undefined) {
+            return;
+        }
 
-            const existing: Record<number, RouteParamMetadata> =
-                Reflect.getMetadata('parameters', target, propertyKey) ?? {};
+        const existing: Record<number, RouteParamMetadata> =
+            Reflect.getMetadata('parameters', target, propertyKey) ?? {};
 
-            Reflect.defineMetadata(
-                'parameters',
-                {
-                    ...existing,
-                    [parameterIndex]: { type, name },
-                },
-                target,
-                propertyKey,
-            );
-        };
+        Reflect.defineMetadata(
+            'parameters',
+            {
+                ...existing,
+                [parameterIndex]: { type, name, pipes },
+            },
+            target,
+            propertyKey,
+        );
     };
 }
 
-export function Body() {
-    return createParamDecorator('body')();
+export function Body(...pipes: PipeRef[]) {
+    return createParamDecorator('body', undefined, pipes);
 }
 
-export function Param(name: string) {
-    return createParamDecorator('param')(name);
+export function Param(name: string, ...pipes: PipeRef[]) {
+    return createParamDecorator('param', name, pipes);
 }
 
-export function Query(name: string) {
-    return createParamDecorator('query')(name);
+export function Query(name: string, ...pipes: PipeRef[]) {
+    return createParamDecorator('query', name, pipes);
 }

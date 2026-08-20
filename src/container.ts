@@ -10,13 +10,24 @@ function isToken(value: unknown): value is Token {
 export class Container {
     private readonly instances = new Map<Constructor, unknown>();
     private readonly providers = new Map<Token, Constructor>();
+    private readonly values = new Map<Token, unknown>();
 
     register<T>(token: Token<T>, provider: Constructor<T>): this {
         this.providers.set(token, provider);
         return this;
     }
 
+    /** Value provider (Nest's `useValue`): a ready object instead of a class. */
+    registerValue<T>(token: Token<T>, value: T): this {
+        this.values.set(token, value);
+        return this;
+    }
+
     get<T>(token: Token<T>): T {
+        if (this.values.has(token)) {
+            return this.values.get(token) as T;
+        }
+
         const provider = this.providers.get(token);
 
         if (!provider) {
@@ -30,6 +41,10 @@ export class Container {
         let provider: Constructor;
 
         if (isToken(token)) {
+            if (this.values.has(token)) {
+                return this.values.get(token) as T;
+            }
+
             const registered = this.providers.get(token);
             if (!registered) {
                 throw new Error(`Provider for token ${String(token)} is not registered`);
