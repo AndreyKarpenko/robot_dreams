@@ -6,6 +6,7 @@ import { ValidationException, ValidationPipe } from './pipes/validation.pipe';
 import { MatchedRoute, Router } from './router';
 import { Guard } from './guards/auth.guard';
 import { Interceptor } from './interceptors/logging.interceptor';
+import { ZodValidationPipe } from './pipes/zod-validation.pipe';
 
 type ControllerInstance = Record<string | symbol, (...args: unknown[]) => unknown>;
 
@@ -131,7 +132,12 @@ export class Dispatcher {
             }
 
             if (parameter.type === 'body') {
-                args[parameterIndex] = await this.validationPipe.transform(body, metatype);
+                if (parameter.schema) {
+                    const pipe = new ZodValidationPipe(parameter.schema);
+                    args[parameterIndex] = pipe.transform(body);
+                } else {
+                    args[parameterIndex] = await this.validationPipe.transform(body, metatype);
+                }
             }
         }
 

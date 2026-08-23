@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query } from '../decorators';
-import { CreateUserDto } from '../dto/create-user.dto';
+import { CreateUserDto, CreateUserSchema } from '../dto/create-user.dto';
 import { UserService } from '../services';
 
 @Controller('users')
@@ -17,7 +17,7 @@ export class UserController {
     }
 
     @Post()
-    create(@Body() dto: CreateUserDto) {
+    create(@Body(CreateUserSchema) dto: CreateUserDto) {
         return this.userService.create(dto);
     }
 }
