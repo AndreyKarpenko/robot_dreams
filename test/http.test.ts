@@ -1,31 +1,19 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { request as httpRequest, type IncomingMessage, type Server } from 'node:http';
 import { PassThrough } from 'node:stream';
 
 import { createApp } from '../src/app';
 import { UserController } from '../src/controllers/UserController';
 import { Dispatcher } from '../src/dispatcher';
-import { CreateUserDto } from '../src/dto/create-user.dto';
 import { UserService } from '../src/services';
-
-async function listen(server: Server): Promise<string> {
-    await new Promise<void>((resolve) => {
-        server.listen(0, '127.0.0.1', resolve);
-    });
-
-    const address = server.address();
-
-    if (!address || typeof address === 'string') {
-        throw new Error('Failed to bind HTTP server');
-    }
-
-    return `http://127.0.0.1:${address.port}`;
-}
+import { AUTH_HEADERS, listen } from './http-utils';
 
 describe('HTTP dispatcher', () => {
     let server: Server | undefined;
 
     afterEach(async () => {
+        vi.restoreAllMocks();
+
         if (!server) {
             return;
         }
@@ -42,10 +30,12 @@ describe('HTTP dispatcher', () => {
         server = app.server;
         const baseUrl = await listen(server);
 
-        const response = await fetch(`${baseUrl}/users/42`);
+        const response = await fetch(`${baseUrl}/users/1`, { headers: AUTH_HEADERS });
+        const body = await response.json();
 
         expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toEqual({ id: '42' });
+        expect(body.user).toEqual({ id: 1, name: '111111' });
+        expect(body.requestId).toEqual(response.headers.get('x-request-id'));
     });
 
     it('substitutes @Param into the handler argument', async () => {
@@ -53,9 +43,10 @@ describe('HTTP dispatcher', () => {
         server = app.server;
         const baseUrl = await listen(server);
 
-        const body = await (await fetch(`${baseUrl}/users/42`)).text();
+        const body = await (await fetch(`${baseUrl}/users/2`, { headers: AUTH_HEADERS })).text();
 
-        expect(body).toMatch(/42/);
+        expect(body).toMatch(/222222/);
+        expect(body).toMatch(/"id":2/);
     });
 
     it('substitutes @Query into the handler argument', async () => {
@@ -63,7 +54,7 @@ describe('HTTP dispatcher', () => {
         server = app.server;
         const baseUrl = await listen(server);
 
-        const response = await fetch(`${baseUrl}/users?limit=5`);
+        const response = await fetch(`${baseUrl}/users?limit=5`, { headers: AUTH_HEADERS });
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ limit: '5' });
@@ -76,7 +67,7 @@ describe('HTTP dispatcher', () => {
 
         const response = await fetch(`${baseUrl}/users`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: 'user@example.com' }),
         });
 
@@ -91,7 +82,7 @@ describe('HTTP dispatcher', () => {
 
         const response = await fetch(`${baseUrl}/users`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: 'not-an-email' }),
         });
 
@@ -103,20 +94,20 @@ describe('HTTP dispatcher', () => {
             expect.arrayContaining([
                 expect.objectContaining({
                     field: 'email',
-                    constraints: expect.any(Object),
+                    message: expect.any(String),
                 }),
             ]),
         );
     });
 
-    it('passes a CreateUserDto instance to the handler', async () => {
+    it('passes a parsed create-user payload to the handler', async () => {
         const app = createApp();
         server = app.server;
         const baseUrl = await listen(server);
 
         const response = await fetch(`${baseUrl}/users`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: 'user@example.com' }),
         });
 
@@ -124,8 +115,7 @@ describe('HTTP dispatcher', () => {
 
         const created = app.container.resolve(UserService).created[0];
 
-        expect(created).toBeInstanceOf(CreateUserDto);
-        expect(created.email).toBe('user@example.com');
+        expect(created).toEqual({ email: 'user@example.com' });
     });
 
     it('resolves the controller through the IoC container as a singleton', async () => {
@@ -133,7 +123,7 @@ describe('HTTP dispatcher', () => {
         server = app.server;
         const baseUrl = await listen(server);
 
-        await fetch(`${baseUrl}/users/1`);
+        await fetch(`${baseUrl}/users/1`, { headers: AUTH_HEADERS });
 
         const controller = app.container.resolve(UserController);
         const service = app.container.resolve(UserService);
@@ -148,11 +138,12 @@ describe('HTTP dispatcher', () => {
         server = app.server;
         const baseUrl = await listen(server);
         const encoded = encodeURIComponent('Іван Петров');
+        const spy = vi.spyOn(UserService.prototype, 'findById');
 
-        const response = await nodeRequest(baseUrl, `/users/${encoded}`);
+        const response = await nodeRequest(baseUrl, `/users/${encoded}`, AUTH_HEADERS);
 
-        expect(response.status).toBe(200);
-        expect(JSON.parse(response.body)).toEqual({ id: 'Іван Петров' });
+        expect(spy).toHaveBeenCalledWith('Іван Петров');
+        expect(response.status).toBe(404);
     });
 
     it('strips undeclared DTO fields before the handler', async () => {
@@ -162,17 +153,17 @@ describe('HTTP dispatcher', () => {
 
         const response = await fetch(`${baseUrl}/users`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: 'user@example.com', isAdmin: true }),
         });
 
         expect(response.status).toBe(201);
 
-        const created = app.container.resolve(UserService).created[0] as CreateUserDto & {
+        const created = app.container.resolve(UserService).created[0] as {
+            email: string;
             isAdmin?: boolean;
         };
 
-        expect(created).toBeInstanceOf(CreateUserDto);
         expect(created.email).toBe('user@example.com');
         expect(created).not.toHaveProperty('isAdmin');
     });
@@ -184,7 +175,7 @@ describe('HTTP dispatcher', () => {
         const req = new PassThrough();
 
         expect(splitAt).toBeGreaterThan(1);
-        const dispatcher = new Dispatcher({} as never, {} as never);
+        const dispatcher = new Dispatcher({} as never, {} as never, [], [], []);
         const bodyPromise = (
             dispatcher as unknown as { readBody(req: IncomingMessage): Promise<string> }
         ).readBody(req as unknown as IncomingMessage);
@@ -197,7 +188,11 @@ describe('HTTP dispatcher', () => {
     });
 });
 
-function nodeRequest(baseUrl: string, path: string): Promise<{ status: number; body: string }> {
+function nodeRequest(
+    baseUrl: string,
+    path: string,
+    headers: Record<string, string> = {},
+): Promise<{ status: number; body: string }> {
     return new Promise((resolve, reject) => {
         const parsed = new URL(baseUrl);
         const req = httpRequest(
@@ -206,6 +201,7 @@ function nodeRequest(baseUrl: string, path: string): Promise<{ status: number; b
                 port: parsed.port,
                 path,
                 method: 'GET',
+                headers,
             },
             (res) => {
                 const chunks: Buffer[] = [];
