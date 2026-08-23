@@ -8,6 +8,7 @@ import { Router } from './router';
 
 import { AuthGuard } from './guards/auth.guard';
 import { LoggingInterceptor, LoggingTestInterceptor } from './interceptors/logging.interceptor';
+import { RequestIdMiddleware } from './middleware/middleware';
 
 export function createApp(container = new Container()): {
     container: Container;
@@ -21,6 +22,7 @@ export function createApp(container = new Container()): {
         container,
         [new AuthGuard()],
         [new LoggingInterceptor(), new LoggingTestInterceptor()],
+        [new RequestIdMiddleware()],
     );
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
         void dispatcher.handle(req, res);
