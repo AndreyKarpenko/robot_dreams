@@ -11,6 +11,7 @@ services:
             - ./package.json:/app/package.json
             - ./package-lock.json:/app/package-lock.json
             - ./tsconfig.json:/app/tsconfig.json
+            - ./tsconfig.build.json:/app/tsconfig.build.json
             - ./vitest.config.ts:/app/vitest.config.ts
         ports:
             - '${API_PORT:-3000}:${API_PORT:-3000}'

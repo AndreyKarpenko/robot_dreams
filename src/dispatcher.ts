@@ -2,13 +2,14 @@ import { IncomingMessage, ServerResponse } from 'node:http';
 
 import { Container } from './container';
 import { RouteParamMetadata } from './decorators';
-import { ValidationPipe } from './pipes/validation.pipe';
-import { MatchedRoute, Router } from './router';
+import { NotFoundError } from './errors/not-found.error';
+import { ExceptionFilter } from './filters/exception.filter';
 import { Guard } from './guards/auth.guard';
 import { Interceptor } from './interceptors/logging.interceptor';
-import { ZodValidationPipe } from './pipes/zod-validation.pipe';
-import { ExceptionFilter } from './filters/exception.filter';
 import { Middleware } from './middleware/middleware';
+import { ValidationPipe } from './pipes/validation.pipe';
+import { ZodValidationPipe } from './pipes/zod-validation.pipe';
+import { MatchedRoute, Router } from './router';
 
 type ControllerInstance = Record<string | symbol, (...args: unknown[]) => unknown>;
 
@@ -24,57 +25,59 @@ export class Dispatcher {
         private middlewares: Middleware[],
     ) {}
 
-    private async handleLifecycle(
-        matched: MatchedRoute,
-        req: IncomingMessage,
-        res: ServerResponse,
-    ): Promise<void> {
+    async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
         try {
-            for (const guard of this.guards) {
-                const allowed = await guard.canActivate(req);
+            let next = async () => {
+                const method = req.method ?? 'GET';
+                const url = req.url ?? '/';
+                const matched = this.router.match(method, url);
 
-                if (!allowed) {
-                    res.statusCode = 403;
-                    res.setHeader('Content-Type', 'application/json');
-                    res.end(JSON.stringify({ message: 'Request Forbidden' }));
-                    return;
+                if (!matched) {
+                    throw new NotFoundError(`Cannot ${method} ${url.split('?')[0]}`);
                 }
-            }
 
-            let next = () => this.invoke(matched, req);
+                await this.handleLifecycle(matched, req, res);
+            };
 
-            for (let interceptor of [...this.interceptors].reverse()) {
+            for (const middleware of [...this.middlewares].reverse()) {
                 const currentNext = next;
-                next = () => interceptor.intercept(req, currentNext);
+                next = () => middleware.use(req, res, currentNext);
             }
-            const resultValue = await next();
 
-            res.statusCode = req.method === 'POST' ? 201 : 200;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify(resultValue));
+            await next();
         } catch (error) {
             this.exceptionFilter.catch(error, res);
         }
     }
 
-    async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-        let next = async () => {
-            const matched = this.router.match(req.method ?? 'GET', req.url ?? '/');
+    private async handleLifecycle(
+        matched: MatchedRoute,
+        req: IncomingMessage,
+        res: ServerResponse,
+    ): Promise<void> {
+        for (const guard of this.guards) {
+            const allowed = await guard.canActivate(req);
 
-            if (!matched) {
-                res.statusCode = 404;
-                res.end('404 Not Found');
+            if (!allowed) {
+                res.statusCode = 403;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ message: 'Request Forbidden' }));
                 return;
             }
-
-            await this.handleLifecycle(matched, req, res);
-        };
-
-        for (const middleware of [...this.middlewares].reverse()) {
-            const currentNext = next;
-            next = () => middleware.use(req, res, currentNext);
         }
-        await next();
+
+        let next = () => this.invoke(matched, req);
+
+        for (const interceptor of [...this.interceptors].reverse()) {
+            const currentNext = next;
+            next = () => interceptor.intercept(req, currentNext);
+        }
+
+        const resultValue = await next();
+
+        res.statusCode = req.method === 'POST' ? 201 : 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(resultValue));
     }
 
     private async invoke(matched: MatchedRoute, req: IncomingMessage): Promise<unknown> {
@@ -124,8 +127,6 @@ export class Dispatcher {
 
         for (const [index, parameter] of Object.entries(parameters)) {
             const parameterIndex = Number(index);
-            const metatype = paramTypes[parameterIndex] as
-                (new (...args: unknown[]) => unknown) | undefined;
 
             if (parameter.type === 'param') {
                 args[parameterIndex] = params[parameter.name!];
@@ -137,9 +138,11 @@ export class Dispatcher {
 
             if (parameter.type === 'body') {
                 if (parameter.schema) {
-                    const pipe = new ZodValidationPipe(parameter.schema);
-                    args[parameterIndex] = pipe.transform(body);
+                    args[parameterIndex] = new ZodValidationPipe(parameter.schema).transform(body);
                 } else {
+                    const metatype = paramTypes[parameterIndex] as
+                        | (new (...args: unknown[]) => unknown)
+                        | undefined;
                     args[parameterIndex] = await this.validationPipe.transform(body, metatype);
                 }
             }

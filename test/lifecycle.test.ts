@@ -7,6 +7,7 @@ import { Container } from '../src/container';
 import { Controller, Get } from '../src/decorators';
 import { UserController } from '../src/controllers/UserController';
 import { Dispatcher } from '../src/dispatcher';
+import { LoggingInterceptor, type Interceptor } from '../src/interceptors/logging.interceptor';
 import { RequestIdMiddleware } from '../src/middleware/middleware';
 import { Router } from '../src/router';
 import { UserRepository, UserService } from '../src/services';
@@ -72,6 +73,43 @@ describe('request lifecycle', () => {
         expect(JSON.parse(body)).toEqual({ message: 'User not found' });
     });
 
+    it('maps an unexpected Error thrown by an interceptor to 500 without leaking the message or stack', async () => {
+        @Controller('crash-after')
+        class CrashAfterController {
+            @Get()
+            ok() {
+                return { ok: true };
+            }
+        }
+
+        const interceptor: Interceptor = {
+            async intercept(_req, next) {
+                await next();
+                throw new Error('boom');
+            },
+        };
+
+        const dispatcher = new Dispatcher(
+            new Router([CrashAfterController]),
+            new Container(),
+            [],
+            [interceptor],
+            [new RequestIdMiddleware()],
+        );
+
+        server = createServer((req, res) => {
+            void dispatcher.handle(req, res);
+        });
+
+        const baseUrl = await listen(server);
+        const response = await fetch(`${baseUrl}/crash-after`);
+        const body = await response.text();
+
+        expect(response.status).toBe(500);
+        expect(JSON.parse(body)).toEqual({ message: 'Internal Server Error' });
+        expect(body).not.toMatch(/boom|at .*\.ts:/);
+    });
+
     it('maps an unexpected Error to 500 without leaking the message or stack', async () => {
         @Controller('crash')
         class CrashController {
@@ -85,7 +123,7 @@ describe('request lifecycle', () => {
             new Router([CrashController]),
             new Container(),
             [],
-            [],
+            [new LoggingInterceptor()],
             [new RequestIdMiddleware()],
         );
 

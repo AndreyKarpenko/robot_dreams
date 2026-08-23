@@ -7,9 +7,9 @@ export class UserController {
     constructor(public readonly userService: UserService) {}
 
     @Get(':id')
-    findOne(@Param('id') id: string) {
+    async findOne(@Param('id') id: string) {
         return {
-            user: this.userService.findById(id),
+            user: await this.userService.findById(id),
             requestId: this.userService.getRequestId(),
         };
     }

@@ -10,7 +10,9 @@ export class UserRepository {
         { name: '333333', id: 3 },
     ];
 
-    findById(id: string) {
+    async findById(id: string) {
+        await Promise.resolve();
+
         const requestId = getRequestId();
         console.log(requestId);
 

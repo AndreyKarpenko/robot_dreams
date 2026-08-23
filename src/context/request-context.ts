@@ -11,5 +11,11 @@ export function run<T>(requestId: string, callback: () => T): T {
 }
 
 export function getRequestId(): string {
-    return storage.getStore()!.requestId;
+    const store = storage.getStore();
+
+    if (!store) {
+        throw new Error('Request context is not available');
+    }
+
+    return store.requestId;
 }
