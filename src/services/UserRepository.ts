@@ -14,7 +14,7 @@ export class UserRepository {
         await Promise.resolve();
 
         const requestId = getRequestId();
-        console.log(requestId);
+        console.log(`[${requestId}] UserRepository.findById(${id})`);
 
         const user = this.users.find((user) => user.id === Number(id));
         if (!user) {

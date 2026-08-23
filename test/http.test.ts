@@ -90,14 +90,30 @@ describe('HTTP dispatcher', () => {
 
         expect(response.status).toBe(400);
         expect(body).toMatch(/email/);
-        expect(JSON.parse(body)).toEqual(
-            expect.arrayContaining([
+        expect(JSON.parse(body)).toEqual({
+            message: 'Validation failed',
+            errors: expect.arrayContaining([
                 expect.objectContaining({
                     field: 'email',
                     message: expect.any(String),
                 }),
             ]),
-        );
+        });
+    });
+
+    it('rejects a malformed JSON body with 400', async () => {
+        const app = createApp();
+        server = app.server;
+        const baseUrl = await listen(server);
+
+        const response = await fetch(`${baseUrl}/users`, {
+            method: 'POST',
+            headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
+            body: '{"email":',
+        });
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({ message: 'Invalid JSON body' });
     });
 
     it('passes a parsed create-user payload to the handler', async () => {

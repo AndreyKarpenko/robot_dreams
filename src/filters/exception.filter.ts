@@ -1,8 +1,10 @@
 import { ServerResponse } from 'node:http';
 
+import { findRequestId } from '../context/request-context';
+import { BadRequestError } from '../errors/bad-request.error';
+import { ForbiddenError } from '../errors/forbidden.error';
 import { NotFoundError } from '../errors/not-found.error';
 import { ValidationError } from '../errors/validation.error';
-import { ValidationException } from '../pipes/validation.pipe';
 
 export class ExceptionFilter {
     catch(error: unknown, res: ServerResponse): void {
@@ -10,29 +12,35 @@ export class ExceptionFilter {
             return;
         }
 
+        if (error instanceof ValidationError) {
+            this.send(res, 400, { message: error.message, errors: error.errors });
+            return;
+        }
+
+        if (error instanceof BadRequestError) {
+            this.send(res, 400, { message: error.message });
+            return;
+        }
+
+        if (error instanceof ForbiddenError) {
+            this.send(res, 403, { message: error.message });
+            return;
+        }
+
         if (error instanceof NotFoundError) {
-            res.statusCode = 404;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ message: error.message }));
+            this.send(res, 404, { message: error.message });
             return;
         }
 
-        if (error instanceof ValidationError || error instanceof ValidationException) {
-            res.statusCode = 400;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify(error.errors));
-            return;
-        }
+        const requestId = findRequestId();
+        console.error(`[${requestId ?? 'no-request-id'}] Unhandled error`, error);
 
-        if (error instanceof SyntaxError) {
-            res.statusCode = 400;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ message: 'Invalid JSON' }));
-            return;
-        }
+        this.send(res, 500, { message: 'Internal Server Error' });
+    }
 
-        res.statusCode = 500;
+    private send(res: ServerResponse, statusCode: number, body: unknown): void {
+        res.statusCode = statusCode;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ message: 'Internal Server Error' }));
+        res.end(JSON.stringify(body));
     }
 }

@@ -7,6 +7,7 @@
 ```bash
 npm install
 npm test
+npm run typecheck
 ```
 
 У Docker (образ із ДЗ #5, builder stage з override). Після зміни залежностей спочатку перезберіть образ:
@@ -46,48 +47,77 @@ curl -si http://localhost:3000/users \
 
 ## Життєвий цикл запиту
 
-Кожен HTTP-виклик проходить той самий ланцюг. Exception filter стоїть ззовні й ловить усе, що кинули всередині — включно з interceptor.
+Кожен HTTP-виклик проходить той самий ланцюг. Middleware ставить контекст запиту, exception filter стоїть усередині цього контексту й ловить усе, що кинули глибше — включно з interceptor.
 
 ```
-                 ┌─────────────────────────────────────┐
-                 │         Exception Filter            │
-                 │  NotFoundError → 404                │
-                 │  Zod / ValidationError → 400        │
-                 │  інше → 500 (без стеку назовні)     │
-                 │                                     │
-request ──► Middleware ──► Guard ──► Interceptor       │
-              │              │            │            │
-              │              │            │  before    │
-              │              │            ▼            │
-              │              │          Pipe           │
-              │              │            │            │
-              │              │            ▼            │
-              │              │         Handler         │
-              │              │            │            │
-              │              │            ▼            │
-              │              │       Interceptor       │
-              │              │         after           │
-              │              │            │            │
-              │         false → 403       │            │
-              │         (handler не       │            │
-              │          викликається)    │            │
-              ▼                           ▼            │
-         ALS.run(store)              response          │
-         + X-Request-Id                                │
-                 └─────────────────────────────────────┘
+                          HTTP request
+                               │
+                               ▼
+ ┌─────────────────────────────────────────────────────────────┐
+ │ Middleware — X-Request-Id + AsyncLocalStorage.run(store)     │
+ │ ┌─────────────────────────────────────────────────────────┐ │
+ │ │ Exception Filter — try/catch навколо всього нижче       │ │
+ │ │                                                         │ │
+ │ │   Guard ───── false ──► ForbiddenError ────────► 403    │ │
+ │ │     │ true                                              │ │
+ │ │     ▼                                                   │ │
+ │ │   Interceptor  before: t0 = performance.now()           │ │
+ │ │     │                                                   │ │
+ │ │     ▼                                                   │ │
+ │ │   Pipe (Zod) ─ invalid ─► ValidationError ─────► 400    │ │
+ │ │     │ parsed dto                                        │ │
+ │ │     ▼                                                   │ │
+ │ │   Handler ─── NotFoundError ───────────────────► 404    │ │
+ │ │     │     ─── будь-що інше ──► 500 (без стеку назовні)  │ │
+ │ │     ▼                                                   │ │
+ │ │   Interceptor  after: log `GET /users/1 — 12.3 ms`      │ │
+ │ │     │                                                   │ │
+ │ └─────┼───────────────────────────────────────────────────┘ │
+ └───────┼─────────────────────────────────────────────────────┘
+         ▼
+   HTTP response + X-Request-Id: <той самий id>
 ```
 
 Порядок, який фіксує тест `test/lifecycle-order.test.ts`:
 
 `middleware → guard → interceptor:before → pipe → handler → interceptor:after`
 
-Guard і interceptor відрізняються місцем у цьому ланцюгу і тим, що можуть повернути. Guard відповідає «пускати чи ні» *до* валідації й обробника і не формує успішну відповідь: `false` → `403`. Interceptor обгортає виклик: код до `next()`, виклик, код після — і бачить і вхід, і вихід (наприклад, тривалість `GET /users/1 — 12.3 ms`). Pipe трансформує/валідує аргумент безпосередньо перед handler (тут — Zod 4). Filter — останній: мапить доменні помилки в HTTP і ховає стек на `500`.
+Guard і interceptor відрізняються місцем у цьому ланцюгу і тим, що можуть повернути. Guard відповідає «пускати чи ні» _до_ валідації й обробника і не формує відповідь сам: `false` → `ForbiddenError` → `403` (тест доводить, що при `403` pipe навіть не викликався). Interceptor обгортає виклик: код до `next()`, виклик, код після — і бачить і вхід, і вихід (наприклад, тривалість `GET /users/1 — 12.3 ms`). Pipe трансформує/валідує аргумент безпосередньо перед handler (тут — Zod 4, `src/pipes/zod-validation.pipe.ts`). Filter — останній: мапить доменні помилки в HTTP, а неочікувану помилку логує на сервері й віддає назовні тільки `{"message":"Internal Server Error"}`.
+
+Мапінг помилок (`src/filters/exception.filter.ts`):
+
+| Помилка           | Відповідь                                                   |
+| ----------------- | ----------------------------------------------------------- |
+| `ValidationError` | `400` `{ "message": "Validation failed", "errors": [...] }` |
+| `BadRequestError` | `400` `{ "message": "Invalid JSON body" }`                  |
+| `ForbiddenError`  | `403` `{ "message": "Forbidden" }`                          |
+| `NotFoundError`   | `404` `{ "message": "User not found" }`                     |
+| будь-що інше      | `500` `{ "message": "Internal Server Error" }`              |
+
+Диспетчер має два рівні `try/catch`: внутрішній — усередині ланцюга middleware, щоб filter бачив контекст запиту; зовнішній — страховка на випадок, коли впало саме middleware.
+
+## Де що лежить
+
+| Файл                                      | Призначення                                 |
+| ----------------------------------------- | ------------------------------------------- |
+| `src/dispatcher.ts`                       | сам ланцюг: middleware → guard → … → filter |
+| `src/middleware/middleware.ts`            | `X-Request-Id` і вхід в ALS                 |
+| `src/guards/auth.guard.ts`                | перевірка `Authorization`                   |
+| `src/interceptors/logging.interceptor.ts` | вимірювання тривалості                      |
+| `src/pipes/zod-validation.pipe.ts`        | валідація на Zod 4 (`error.issues`)         |
+| `src/filters/exception.filter.ts`         | мапінг помилок у HTTP                       |
+| `src/context/request-context.ts`          | обгортка над `AsyncLocalStorage`            |
+| `test/lifecycle-order.test.ts`            | тест на точний порядок шести етапів         |
+
+Зовнішніх залежностей у рантаймі рівно дві: `reflect-metadata` і `zod`. Ніяких `@nestjs/*`, `express` чи `fastify`.
 
 ## Чому AsyncLocalStorage, а не глобальна змінна
 
 `requestId` потрібен глибоко в стеку — сервісу, репозиторію, логеру — без протягування параметром через кожну функцію. Глобальна змінна на це не годиться: поки один запит чекає на `await`, event loop встигає взяти наступний і перезаписати глобал. До моменту логування там уже чужий id: відповідь клієнта A отримує ідентифікатор клієнта B.
 
-`AsyncLocalStorage` тримає сховище прив’язаним до ланцюга промисів конкретного запиту. `als.run(store, callback)` має обгортати *весь* обробник (у нас це middleware на вході): інакше глибокі виклики після `await` сховища не побачать. На вході беремо id із `X-Request-Id` або генеруємо UUID, кладемо в ALS і той самий id віддаємо клієнту в заголовку відповіді. Десять паралельних запитів не змішують контексти, бо в кожного свій store.
+`AsyncLocalStorage` тримає сховище прив’язаним до ланцюга промисів конкретного запиту. `als.run(store, callback)` має обгортати _весь_ обробник (у нас це middleware на вході): інакше глибокі виклики після `await` сховища не побачать. На вході беремо id із `X-Request-Id` або генеруємо UUID, кладемо в ALS і той самий id віддаємо клієнту в заголовку відповіді. Десять паралельних запитів не змішують контексти, бо в кожного свій store — це фіксує окремий тест.
+
+Контекст накриває й exception filter, тому серверний лог неочікуваної помилки має вигляд `[<requestId>] Unhandled error …`: за id з відповіді клієнта можна знайти справжню причину `500`, якої в тілі відповіді немає. `UserRepository` — два рівні глибше обробника (`controller → service → repository`) — читає id тим самим `getRequestId()`, без жодного параметра в сигнатурі.
 
 ## Як це працює (IoC)
 

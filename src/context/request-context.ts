@@ -6,7 +6,7 @@ type RequestStore = {
 
 const storage = new AsyncLocalStorage<RequestStore>();
 
-export function run<T>(requestId: string, callback: () => T): T {
+export function runWithRequestId<T>(requestId: string, callback: () => T): T {
     return storage.run({ requestId }, callback);
 }
 
@@ -18,4 +18,8 @@ export function getRequestId(): string {
     }
 
     return store.requestId;
+}
+
+export function findRequestId(): string | undefined {
+    return storage.getStore()?.requestId;
 }

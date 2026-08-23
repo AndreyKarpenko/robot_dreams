@@ -2,19 +2,19 @@ import { IncomingMessage, ServerResponse } from 'node:http';
 
 import { Container } from './container';
 import { RouteParamMetadata } from './decorators';
+import { BadRequestError } from './errors/bad-request.error';
+import { ForbiddenError } from './errors/forbidden.error';
 import { NotFoundError } from './errors/not-found.error';
 import { ExceptionFilter } from './filters/exception.filter';
 import { Guard } from './guards/auth.guard';
 import { Interceptor } from './interceptors/logging.interceptor';
 import { Middleware } from './middleware/middleware';
-import { ValidationPipe } from './pipes/validation.pipe';
 import { ZodValidationPipe } from './pipes/zod-validation.pipe';
 import { MatchedRoute, Router } from './router';
 
 type ControllerInstance = Record<string | symbol, (...args: unknown[]) => unknown>;
 
 export class Dispatcher {
-    private validationPipe = new ValidationPipe();
     private exceptionFilter = new ExceptionFilter();
 
     constructor(
@@ -26,25 +26,31 @@ export class Dispatcher {
     ) {}
 
     async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+        const chain = this.middlewares.reduceRight<() => Promise<void>>(
+            (next, middleware) => () => middleware.use(req, res, next),
+            () => this.route(req, res),
+        );
+
         try {
-            let next = async () => {
-                const method = req.method ?? 'GET';
-                const url = req.url ?? '/';
-                const matched = this.router.match(method, url);
+            await chain();
+        } catch (error) {
+            this.exceptionFilter.catch(error, res);
+        }
+    }
 
-                if (!matched) {
-                    throw new NotFoundError(`Cannot ${method} ${url.split('?')[0]}`);
-                }
+    // The filter sits inside the middleware chain so that it still sees the request context;
+    // handle() keeps an outer catch for middleware that fails before the context exists.
+    private async route(req: IncomingMessage, res: ServerResponse): Promise<void> {
+        try {
+            const method = req.method ?? 'GET';
+            const url = req.url ?? '/';
+            const matched = this.router.match(method, url);
 
-                await this.handleLifecycle(matched, req, res);
-            };
-
-            for (const middleware of [...this.middlewares].reverse()) {
-                const currentNext = next;
-                next = () => middleware.use(req, res, currentNext);
+            if (!matched) {
+                throw new NotFoundError(`Cannot ${method} ${url.split('?')[0]}`);
             }
 
-            await next();
+            await this.handleLifecycle(matched, req, res);
         } catch (error) {
             this.exceptionFilter.catch(error, res);
         }
@@ -59,25 +65,20 @@ export class Dispatcher {
             const allowed = await guard.canActivate(req);
 
             if (!allowed) {
-                res.statusCode = 403;
-                res.setHeader('Content-Type', 'application/json');
-                res.end(JSON.stringify({ message: 'Request Forbidden' }));
-                return;
+                throw new ForbiddenError();
             }
         }
 
-        let next = () => this.invoke(matched, req);
+        const invoke = this.interceptors.reduceRight<() => Promise<unknown>>(
+            (next, interceptor) => () => interceptor.intercept(req, next),
+            () => this.invoke(matched, req),
+        );
 
-        for (const interceptor of [...this.interceptors].reverse()) {
-            const currentNext = next;
-            next = () => interceptor.intercept(req, currentNext);
-        }
-
-        const resultValue = await next();
+        const resultValue = await invoke();
 
         res.statusCode = req.method === 'POST' ? 201 : 200;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify(resultValue));
+        res.end(JSON.stringify(resultValue ?? null));
     }
 
     private async invoke(matched: MatchedRoute, req: IncomingMessage): Promise<unknown> {
@@ -98,9 +99,11 @@ export class Dispatcher {
             route.handler,
         );
 
-        const paramTypes: unknown[] =
-            Reflect.getMetadata('design:paramtypes', route.controller.prototype, route.handler) ??
-            [];
+        const args: unknown[] = [];
+
+        if (!parameters) {
+            return args;
+        }
 
         const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
         const query: Record<string, string> = {};
@@ -111,18 +114,8 @@ export class Dispatcher {
 
         let body: unknown;
 
-        if (
-            parameters &&
-            Object.values(parameters).some((parameter) => parameter.type === 'body')
-        ) {
-            const rawBody = await this.readBody(req);
-            body = rawBody ? JSON.parse(rawBody) : {};
-        }
-
-        const args: unknown[] = [];
-
-        if (!parameters) {
-            return args;
+        if (Object.values(parameters).some((parameter) => parameter.type === 'body')) {
+            body = await this.parseBody(req);
         }
 
         for (const [index, parameter] of Object.entries(parameters)) {
@@ -137,18 +130,27 @@ export class Dispatcher {
             }
 
             if (parameter.type === 'body') {
-                if (parameter.schema) {
-                    args[parameterIndex] = new ZodValidationPipe(parameter.schema).transform(body);
-                } else {
-                    const metatype = paramTypes[parameterIndex] as
-                        | (new (...args: unknown[]) => unknown)
-                        | undefined;
-                    args[parameterIndex] = await this.validationPipe.transform(body, metatype);
-                }
+                args[parameterIndex] = parameter.schema
+                    ? new ZodValidationPipe(parameter.schema).transform(body)
+                    : body;
             }
         }
 
         return args;
+    }
+
+    private async parseBody(req: IncomingMessage): Promise<unknown> {
+        const rawBody = await this.readBody(req);
+
+        if (!rawBody) {
+            return {};
+        }
+
+        try {
+            return JSON.parse(rawBody);
+        } catch {
+            throw new BadRequestError('Invalid JSON body');
+        }
     }
 
     private readBody(req: IncomingMessage): Promise<string> {
