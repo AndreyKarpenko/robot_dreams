@@ -4,6 +4,8 @@ import { Container } from './container';
 import { RouteParamMetadata } from './decorators';
 import { ValidationException, ValidationPipe } from './pipes/validation.pipe';
 import { MatchedRoute, Router } from './router';
+import { Guard } from './guards/auth.guard';
+import { Interceptor } from './interceptors/logging.interceptor';
 
 type ControllerInstance = Record<string | symbol, (...args: unknown[]) => unknown>;
 
@@ -13,6 +15,8 @@ export class Dispatcher {
     constructor(
         private router: Router,
         private container: Container,
+        private guards: Guard[],
+        private interceptors: Interceptor[],
     ) {}
 
     async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -25,7 +29,24 @@ export class Dispatcher {
         }
 
         try {
-            const resultValue = await this.invoke(matched, req);
+            for (const guard of this.guards) {
+                const allowed = await guard.canActivate(req);
+
+                if (!allowed) {
+                    res.statusCode = 403;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ message: 'Request Forbidden' }));
+                    return;
+                }
+            }
+
+            let next = () => this.invoke(matched, req);
+
+            for (let interceptor of [...this.interceptors].reverse()) {
+                const currentNext = next;
+                next = () => interceptor.intercept(req, currentNext);
+            }
+            const resultValue = await next();
 
             res.statusCode = req.method === 'POST' ? 201 : 200;
             res.setHeader('Content-Type', 'application/json');
