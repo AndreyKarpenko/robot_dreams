@@ -2,16 +2,18 @@ import { IncomingMessage, ServerResponse } from 'node:http';
 
 import { Container } from './container';
 import { RouteParamMetadata } from './decorators';
-import { ValidationException, ValidationPipe } from './pipes/validation.pipe';
+import { ValidationPipe } from './pipes/validation.pipe';
 import { MatchedRoute, Router } from './router';
 import { Guard } from './guards/auth.guard';
 import { Interceptor } from './interceptors/logging.interceptor';
 import { ZodValidationPipe } from './pipes/zod-validation.pipe';
+import { ExceptionFilter } from './filters/exception.filter';
 
 type ControllerInstance = Record<string | symbol, (...args: unknown[]) => unknown>;
 
 export class Dispatcher {
     private validationPipe = new ValidationPipe();
+    private exceptionFilter = new ExceptionFilter();
 
     constructor(
         private router: Router,
@@ -53,23 +55,7 @@ export class Dispatcher {
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify(resultValue));
         } catch (error) {
-            if (error instanceof ValidationException) {
-                res.statusCode = 400;
-                res.setHeader('Content-Type', 'application/json');
-                res.end(JSON.stringify(error.errors));
-                return;
-            }
-
-            if (error instanceof SyntaxError) {
-                res.statusCode = 400;
-                res.setHeader('Content-Type', 'application/json');
-                res.end(JSON.stringify({ message: 'Invalid JSON' }));
-                return;
-            }
-
-            res.statusCode = 500;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ message: 'Internal Server Error' }));
+            this.exceptionFilter.catch(error, res);
         }
     }
 
