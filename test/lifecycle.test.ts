@@ -9,7 +9,7 @@ import { UserController } from '../src/controllers/UserController';
 import { Dispatcher } from '../src/dispatcher';
 import { RequestIdMiddleware } from '../src/middleware/middleware';
 import { Router } from '../src/router';
-import { UserService } from '../src/services';
+import { UserRepository, UserService } from '../src/services';
 import { AUTH_HEADERS, listen } from './http-utils';
 
 describe('request lifecycle', () => {
@@ -104,6 +104,12 @@ describe('request lifecycle', () => {
 
     it('propagates requestId from AsyncLocalStorage without passing it as an argument', async () => {
         expect(UserService.prototype.getRequestId.length).toBe(0);
+        expect(UserRepository.prototype.findById.length).toBe(1);
+
+        const lines: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+            lines.push(args.map(String).join(' '));
+        });
 
         const requestId = 'client-request-id';
         const app = createApp();
@@ -118,6 +124,7 @@ describe('request lifecycle', () => {
         expect(response.status).toBe(200);
         expect(response.headers.get('x-request-id')).toBe(requestId);
         expect(body.requestId).toBe(requestId);
+        expect(lines).toContain(requestId);
     });
 
     it('sets X-Request-Id when the client did not send one', async () => {

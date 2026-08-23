@@ -1,27 +1,20 @@
 import { Injectable } from '../decorators';
 import { CreateUserDto } from '../dto/create-user.dto';
-import { NotFoundError } from '../errors/not-found.error';
 import { getRequestId } from '../context/request-context';
+import { UserRepository } from './UserRepository';
 
 @Injectable()
 export class UserService {
     readonly created: CreateUserDto[] = [];
-    users = [
-        { name: '111111', id: 1 },
-        { name: '222222', id: 2 },
-        { name: '333333', id: 3 },
-    ];
+
+    constructor(private readonly userRepository: UserRepository) {}
 
     getRequestId() {
         return getRequestId();
     }
 
     findById(id: string) {
-        const user = this.users.find((user) => user.id === Number(id));
-        if (!user) {
-            throw new NotFoundError('User not found');
-        }
-        return user;
+        return this.userRepository.findById(id);
     }
 
     findAll(limit?: string) {
