@@ -1,5 +1,7 @@
 import { IncomingMessage, ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
 
+import { getRequestId, run } from './context/request-context';
 import { Container } from './container';
 import { RouteParamMetadata } from './decorators';
 import { ValidationPipe } from './pipes/validation.pipe';
@@ -24,6 +26,10 @@ export class Dispatcher {
 
     async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
         const matched = this.router.match(req.method ?? 'GET', req.url ?? '/');
+        const requestId =
+            typeof req.headers['x-request-id'] === 'string'
+                ? req.headers['x-request-id']
+                : randomUUID();
 
         if (!matched) {
             res.statusCode = 404;
@@ -31,32 +37,35 @@ export class Dispatcher {
             return;
         }
 
-        try {
-            for (const guard of this.guards) {
-                const allowed = await guard.canActivate(req);
+        await run(requestId, async () => {
+            try {
+                for (const guard of this.guards) {
+                    const allowed = await guard.canActivate(req);
 
-                if (!allowed) {
-                    res.statusCode = 403;
-                    res.setHeader('Content-Type', 'application/json');
-                    res.end(JSON.stringify({ message: 'Request Forbidden' }));
-                    return;
+                    if (!allowed) {
+                        res.statusCode = 403;
+                        res.setHeader('Content-Type', 'application/json');
+                        res.end(JSON.stringify({ message: 'Request Forbidden' }));
+                        return;
+                    }
                 }
+
+                let next = () => this.invoke(matched, req);
+
+                for (let interceptor of [...this.interceptors].reverse()) {
+                    const currentNext = next;
+                    next = () => interceptor.intercept(req, currentNext);
+                }
+                const resultValue = await next();
+
+                res.statusCode = req.method === 'POST' ? 201 : 200;
+                res.setHeader('Content-Type', 'application/json');
+                res.setHeader('X-Request-Id', getRequestId());
+                res.end(JSON.stringify(resultValue));
+            } catch (error) {
+                this.exceptionFilter.catch(error, res);
             }
-
-            let next = () => this.invoke(matched, req);
-
-            for (let interceptor of [...this.interceptors].reverse()) {
-                const currentNext = next;
-                next = () => interceptor.intercept(req, currentNext);
-            }
-            const resultValue = await next();
-
-            res.statusCode = req.method === 'POST' ? 201 : 200;
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify(resultValue));
-        } catch (error) {
-            this.exceptionFilter.catch(error, res);
-        }
+        });
     }
 
     private async invoke(matched: MatchedRoute, req: IncomingMessage): Promise<unknown> {

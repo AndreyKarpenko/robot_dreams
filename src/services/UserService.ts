@@ -1,6 +1,7 @@
 import { Injectable } from '../decorators';
 import { CreateUserDto } from '../dto/create-user.dto';
 import { NotFoundError } from '../errors/not-found.error';
+import { getRequestId } from '../context/request-context';
 
 @Injectable()
 export class UserService {
@@ -10,6 +11,10 @@ export class UserService {
         { name: '222222', id: 2 },
         { name: '333333', id: 3 },
     ];
+
+    getRequestId() {
+        return getRequestId();
+    }
 
     findById(id: string) {
         const user = this.users.find((user) => user.id === Number(id));

@@ -8,7 +8,10 @@ export class UserController {
 
     @Get(':id')
     findOne(@Param('id') id: string) {
-        return this.userService.findById(id);
+        return {
+            user: this.userService.findById(id),
+            requestId: this.userService.getRequestId(),
+        };
     }
 
     @Get()
