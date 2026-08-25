@@ -10,6 +10,7 @@ const products = new Map([
   [2, { id: 2, name: 'Pen', price_cents: 199 }],
 ]);
 const orders = new Map();
+const idempotencyStore = new Map();
 let nextOrderId = 1;
 
 app.use(express.json());
@@ -32,25 +33,45 @@ function sendProblem(res, req, status, title, detail) {
   });
 }
 
-app.get('/products', (req, res) => {
-  const limit = req.query.limit === undefined ? 20 : Number(req.query.limit);
-  const all = [...products.values()];
+function paginate(list, cursor, limit) {
+  const size = limit === undefined ? 20 : Number(limit);
   let start = 0;
-  if (req.query.cursor) {
-    start = Number(Buffer.from(String(req.query.cursor), 'base64').toString('utf8'));
+  if (cursor) {
+    start = Number(Buffer.from(String(cursor), 'base64').toString('utf8'));
     if (Number.isNaN(start) || start < 0) {
       start = 0;
     }
   }
-  const page = all.slice(start, start + limit);
+  const page = list.slice(start, start + size);
   const nextIndex = start + page.length;
-  res.status(200).json({
+  return {
     items: page,
     next_cursor:
-      nextIndex < all.length
+      nextIndex < list.length
         ? Buffer.from(String(nextIndex), 'utf8').toString('base64')
         : null,
-  });
+  };
+}
+
+app.get('/products', (req, res) => {
+  res.status(200).json(
+    paginate([...products.values()], req.query.cursor, req.query.limit),
+  );
+});
+
+app.get('/products/:id', (req, res) => {
+  const product = products.get(Number(req.params.id));
+  if (!product) {
+    sendProblem(res, req, 404, 'Not Found', `Product ${req.params.id} not found`);
+    return;
+  }
+  res.status(200).json(product);
+});
+
+app.get('/orders', (req, res) => {
+  res.status(200).json(
+    paginate([...orders.values()], req.query.cursor, req.query.limit),
+  );
 });
 
 app.get('/orders/:id', (req, res) => {
@@ -63,6 +84,26 @@ app.get('/orders/:id', (req, res) => {
 });
 
 app.post('/orders', (req, res) => {
+  const key = req.headers['idempotency-key'];
+  const fingerprint = JSON.stringify(req.body);
+  const prior = idempotencyStore.get(key);
+
+  if (prior) {
+    if (prior.fingerprint !== fingerprint) {
+      sendProblem(
+        res,
+        req,
+        422,
+        'Unprocessable Entity',
+        'Idempotency-Key was reused with a different request body',
+      );
+      return;
+    }
+    res.set('Idempotency-Replay', 'true');
+    res.status(201).json(prior.order);
+    return;
+  }
+
   const items = [];
   let total_cents = 0;
 
@@ -94,7 +135,18 @@ app.post('/orders', (req, res) => {
   };
   orders.set(nextOrderId, order);
   nextOrderId += 1;
+  idempotencyStore.set(key, { fingerprint, order });
   res.status(201).json(order);
+});
+
+app.use((req, res) => {
+  sendProblem(
+    res,
+    req,
+    404,
+    'Not Found',
+    `No route for ${req.method} ${req.originalUrl}`,
+  );
 });
 
 app.use((err, req, res, _next) => {
@@ -102,6 +154,7 @@ app.use((err, req, res, _next) => {
   const titles = {
     400: 'Bad Request',
     404: 'Not Found',
+    422: 'Unprocessable Entity',
     500: 'Internal Server Error',
   };
   sendProblem(

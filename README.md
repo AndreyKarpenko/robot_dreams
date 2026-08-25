@@ -16,14 +16,18 @@ npm install
 npm start
 ```
 
-Listens on `http://localhost:3000`. Seeded products: id `1` (Notebook) and `2` (Pen).
+Listens on `http://localhost:3000`. Seeded products: id `1` (Notebook, `1299` cents) and `2` (Pen, `199` cents).
 
 ## Spec
 
 - `openapi/openapi.yaml` — OpenAPI 3.0.3, resources `/products` and `/orders`
 - Cursor pagination on list operations (`limit`, `cursor`, `items`, `next_cursor`)
 - `Idempotency-Key` required on `POST /orders`
+- Same key + same body → original `201` with `Idempotency-Replay: true`
+- Same key + different body → `422` `application/problem+json`
 - All 4xx responses use `application/problem+json` (`Problem` schema)
+
+Implemented routes (in-memory): `GET /products`, `GET /products/{id}`, `GET /orders`, `POST /orders`, `GET /orders/{id}`.
 
 ## Acceptance checks
 
@@ -85,7 +89,23 @@ curl -i -X POST http://localhost:3000/orders \
   -d '{"items":[{"product_id":1,"quantity":1}]}'
 ```
 
-Implemented routes: `GET /products`, `POST /orders`, `GET /orders/{id}`. Data is in-memory.
+### Extra challenge — Idempotency-Key semantics
+
+After the successful `201` above:
+
+```bash
+# 201, header Idempotency-Replay: true, same order id
+curl -i -X POST http://localhost:3000/orders \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: k1' \
+  -d '{"items":[{"product_id":1,"quantity":1}]}'
+
+# 422, Content-Type: application/problem+json
+curl -i -X POST http://localhost:3000/orders \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: k1' \
+  -d '{"items":[{"product_id":2,"quantity":1}]}'
+```
 
 ## Nest scaffold (not used for this homework)
 

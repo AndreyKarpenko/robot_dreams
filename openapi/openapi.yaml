@@ -42,12 +42,6 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-        "404":
-          description: Resource not found
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
   /products/{id}:
     get:
       operationId: getProduct
@@ -66,6 +60,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Product"
+        "400":
+          description: Validation failed
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "404":
           description: Product not found
           content:
@@ -114,10 +114,12 @@ paths:
           required: true
           description: >-
             Clients retry safely: the same Idempotency-Key with the same
-            request body returns the original create response instead of
-            creating another order.
+            request body returns the original 201 create response (with
+            Idempotency-Replay: true on replay) instead of creating another
+            order. The same key with a different body is rejected with 422.
           schema:
             type: string
+            minLength: 1
       requestBody:
         required: true
         content:
@@ -126,13 +128,28 @@ paths:
               $ref: "#/components/schemas/CreateOrder"
       responses:
         "201":
-          description: Order created
+          description: Order created, or a replay of the original create
+          headers:
+            Idempotency-Replay:
+              description: >
+                Set to true when this is a replay of a previous successful
+                create with the same Idempotency-Key and body.
+              schema:
+                type: string
+                enum:
+                  - "true"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Order"
         "400":
           description: Validation failed
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Idempotency-Key reused with a different request body
           content:
             application/problem+json:
               schema:
@@ -155,6 +172,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Order"
+        "400":
+          description: Validation failed
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "404":
           description: Order not found
           content:
