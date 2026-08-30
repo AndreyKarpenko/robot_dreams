@@ -1,4 +1,4 @@
-import { Injectable } from '../decorators/injectable';
+import { Injectable } from '../decorators';
 import { AuthService } from './AuthService';
 import { UserService } from './UserService';
 import { PrismaService } from './PrismaService';

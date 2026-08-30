@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query } from '../decorators';
-import { CreateUserDto } from '../dto/create-user.dto';
+import { CreateUserDto, CreateUserSchema } from '../dto/create-user.dto';
 import { UserService } from '../services';
 
 @Controller('users')
@@ -7,8 +7,11 @@ export class UserController {
     constructor(public readonly userService: UserService) {}
 
     @Get(':id')
-    findOne(@Param('id') id: string) {
-        return this.userService.findById(id);
+    async findOne(@Param('id') id: string) {
+        return {
+            user: await this.userService.findById(id),
+            requestId: this.userService.getRequestId(),
+        };
     }
 
     @Get()
@@ -17,7 +20,7 @@ export class UserController {
     }
 
     @Post()
-    create(@Body() dto: CreateUserDto) {
+    create(@Body(CreateUserSchema) dto: CreateUserDto) {
         return this.userService.create(dto);
     }
 }
