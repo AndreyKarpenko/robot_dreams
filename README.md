@@ -25,6 +25,56 @@
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
+## Configuration
+
+Zod validates env on boot (`src/config/env.schema.ts` → `ConfigModule.forRoot({ validate })`). A broken variable kills the process before HTTP starts. The Postgres password is **not** an env var: the pool reads `secrets/db_password` on every new connection.
+
+### Variables
+
+| Variable | Required | Default | Meaning |
+|---|---|---|---|
+| `PORT` | no | `3000` | HTTP port |
+| `DB_URL` | yes | — | `postgres://user@host:port/db` (password in the URL is ignored) |
+| `LOG_LEVEL` | no | `info` | `debug` \| `info` \| `warn` \| `error` |
+| `TIMEOUT_MS` | no | `5000` | outbound timeout, ms |
+
+Contract in git: `.env.example`. Real values: `.env` (gitignored). Sync check: `npm run check:env`.
+
+### How to run
+
+```bash
+cp .env.example .env
+# secrets/db_password must equal the password in init.sql (app-v1-password)
+docker compose up -d --wait
+npm install
+npm run start
+```
+
+- `GET /health` — `{ status, uptime }` (process uptime in seconds)
+- `GET /db` — query through `pg.Pool` (needs Postgres)
+
+### Password rotation (no app restart)
+
+Order in `rotate.sh` is required: `ALTER ROLE` → update the file → `pg_terminate_backend`.
+
+```bash
+# 1. App is already running (npm run start). Remember uptime:
+curl -s localhost:3000/health
+
+# 2. Rotate
+bash rotate.sh
+
+# 3. DB still works; uptime must be higher than before (same process)
+curl -s localhost:3000/db
+curl -s localhost:3000/health
+```
+
+After `docker compose down -v` Postgres is re-initialized with `app-v1-password`. If the file still has a rotated value, write it back:
+
+```bash
+printf 'app-v1-password' > secrets/db_password
+```
+
 ## Project setup
 
 ```bash
