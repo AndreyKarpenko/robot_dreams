@@ -15,7 +15,8 @@ import { HealthController } from './health/health.controller';
       validate,
     }),
     DatabaseModule,
-    ProductsModule, OrdersModule
+    ProductsModule,
+    OrdersModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],

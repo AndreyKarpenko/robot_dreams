@@ -8,7 +8,7 @@
   "scripts": {
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "start:openapi": "node app.cjs",
+    "start:openapi": "npm run build && node app.cjs",
     "start:nest": "nest start",
     "start": "npm run build && node dist/main.js",
     "check:env": "npm run build && node scripts/check-env-example.mjs",
