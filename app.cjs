@@ -35,21 +35,13 @@ function sendProblem(res, req, status, title, detail) {
 
 function paginate(list, cursor, limit) {
   const size = limit === undefined ? 20 : Number(limit);
-  let start = 0;
-  if (cursor) {
-    start = Number(Buffer.from(String(cursor), 'base64').toString('utf8'));
-    if (Number.isNaN(start) || start < 0) {
-      start = 0;
-    }
-  }
+  const start = cursor === undefined ? 0 : Number(cursor);
   const page = list.slice(start, start + size);
   const nextIndex = start + page.length;
   return {
     items: page,
     next_cursor:
-      nextIndex < list.length
-        ? Buffer.from(String(nextIndex), 'utf8').toString('base64')
-        : null,
+      nextIndex < list.length ? String(nextIndex) : null,
   };
 }
 
@@ -113,9 +105,9 @@ app.post('/orders', (req, res) => {
       sendProblem(
         res,
         req,
-        400,
-        'Bad Request',
-        `Unknown product_id: ${line.product_id}`,
+        404,
+        'Not Found',
+        `Product ${line.product_id} not found`,
       );
       return;
     }

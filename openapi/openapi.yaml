@@ -28,7 +28,7 @@ paths:
           required: false
           description: Opaque position token. The client must not interpret it and should pass next_cursor as-is.
           schema:
-            type: string
+            $ref: "#/components/schemas/Cursor"
       responses:
         "200":
           description: A page of products
@@ -53,6 +53,7 @@ paths:
           description: Product id.
           schema:
             type: integer
+            minimum: 1
       responses:
         "200":
           description: Product details
@@ -91,7 +92,7 @@ paths:
           required: false
           description: Opaque position token. The client must not interpret it and should pass next_cursor as-is.
           schema:
-            type: string
+            $ref: "#/components/schemas/Cursor"
       responses:
         "200":
           description: A page of orders
@@ -148,6 +149,12 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "404":
+          description: A product in the order does not exist
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "422":
           description: Idempotency-Key reused with a different request body
           content:
@@ -165,6 +172,7 @@ paths:
           description: Order id.
           schema:
             type: integer
+            minimum: 1
       responses:
         "200":
           description: Order details
@@ -186,8 +194,14 @@ paths:
                 $ref: "#/components/schemas/Problem"
 components:
   schemas:
+    Cursor:
+      type: string
+      minLength: 1
+      pattern: "^[0-9]+$"
+      description: Opaque position token issued by this API. Pass next_cursor as-is.
     Product:
       type: object
+      additionalProperties: false
       required:
         - id
         - name
@@ -195,14 +209,17 @@ components:
       properties:
         id:
           type: integer
+          minimum: 1
         name:
           type: string
+          minLength: 1
         price_cents:
           type: integer
           minimum: 0
           description: Price in cents.
     ProductList:
       type: object
+      additionalProperties: false
       required:
         - items
         - next_cursor
@@ -214,9 +231,12 @@ components:
         next_cursor:
           type: string
           nullable: true
+          minLength: 1
+          pattern: "^[0-9]+$"
           description: Token for the next page. null means there are no more pages.
     Order:
       type: object
+      additionalProperties: false
       required:
         - id
         - status
@@ -225,6 +245,7 @@ components:
       properties:
         id:
           type: integer
+          minimum: 1
         status:
           type: string
           enum:
@@ -240,6 +261,7 @@ components:
           description: Order total in cents.
     OrderList:
       type: object
+      additionalProperties: false
       required:
         - items
         - next_cursor
@@ -251,9 +273,12 @@ components:
         next_cursor:
           type: string
           nullable: true
+          minLength: 1
+          pattern: "^[0-9]+$"
           description: Token for the next page. null means there are no more pages.
     OrderItem:
       type: object
+      additionalProperties: false
       required:
         - product_id
         - quantity
@@ -261,6 +286,7 @@ components:
       properties:
         product_id:
           type: integer
+          minimum: 1
         quantity:
           type: integer
           minimum: 1
@@ -270,17 +296,20 @@ components:
           description: Product price in cents at order time.
     CreateOrderItem:
       type: object
+      additionalProperties: false
       required:
         - product_id
         - quantity
       properties:
         product_id:
           type: integer
+          minimum: 1
         quantity:
           type: integer
           minimum: 1
     CreateOrder:
       type: object
+      additionalProperties: false
       required:
         - items
       properties:
@@ -291,6 +320,7 @@ components:
             $ref: "#/components/schemas/CreateOrderItem"
     Problem:
       type: object
+      additionalProperties: false
       required:
         - type
         - title
