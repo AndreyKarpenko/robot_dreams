@@ -4,13 +4,15 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 NEW_PASSWORD="app-$(openssl rand -hex 8)"
+TMPFILE="secrets/db_password.tmp"
 
 echo "1. ALTER ROLE in Postgres…"
+printf '%s' "${NEW_PASSWORD}" > "${TMPFILE}"
 docker compose exec -T db psql -U admin -d shop \
   -c "ALTER ROLE app_user WITH PASSWORD '${NEW_PASSWORD}';" >/dev/null
 
 echo "2. Update secrets/db_password…"
-printf '%s' "${NEW_PASSWORD}" > secrets/db_password
+mv "${TMPFILE}" secrets/db_password
 
 echo "3. Terminate old app_user backends…"
 docker compose exec -T db psql -U admin -d shop -tA \
