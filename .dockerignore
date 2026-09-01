@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+coverage
+.idea
+
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+secrets

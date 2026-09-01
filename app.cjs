@@ -1,9 +1,13 @@
 const path = require('path');
 const express = require('express');
 const OpenApiValidator = require('express-openapi-validator');
+const { env } = require('node:process');
+const { validate } = require('./dist/config/env.schema.js');
+
+require('dotenv').config();
+const { PORT: port } = validate(env);
 
 const app = express();
-const port = process.env.PORT ?? 3000;
 
 const products = new Map([
   [1, { id: 1, name: 'Notebook', price_cents: 1299 }],

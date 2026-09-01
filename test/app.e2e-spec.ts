@@ -1,8 +1,11 @@
+import { env } from 'node:process';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
+
+env.DB_URL ??= 'postgres://app_user@127.0.0.1:5432/shop';
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;

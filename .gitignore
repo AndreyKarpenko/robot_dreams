@@ -4,6 +4,9 @@
 /build
 /spec.json
 
+# secrets
+/secrets
+
 # Logs
 logs
 *.log
