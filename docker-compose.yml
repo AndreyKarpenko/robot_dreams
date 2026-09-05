@@ -9,6 +9,8 @@ services:
       POSTGRES_DB: shop
     volumes:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # db/ is mounted read-only so schema/seed/index scripts run with -f /db/...
+      - ./db:/db:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U admin -d shop']
       interval: 2s
