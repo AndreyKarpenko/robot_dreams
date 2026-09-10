@@ -5,7 +5,8 @@
 /spec.json
 
 # secrets
-/secrets
+/secrets/*
+!/secrets/*.example
 
 # Logs
 logs
