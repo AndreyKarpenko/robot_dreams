@@ -4,7 +4,9 @@
 -- Money is numeric(12,2), never float. Time is timestamptz, never timestamp.
 -- Surrogate keys are identity columns, not serial ("Don't Do This").
 -- No optimization indexes here: they live in db/indexes.sql so that the
--- "before" EXPLAIN runs against a bare schema.
+-- "before" EXPLAIN runs against a bare schema. The unique index on
+-- lower(email) is a constraint (login is case-insensitive), not an extra
+-- lookup index — table UNIQUE (email) cannot express that.
 
 DROP TABLE IF EXISTS order_items CASCADE;
 DROP TABLE IF EXISTS orders CASCADE;
@@ -17,11 +19,16 @@ CREATE TABLE users (
   email      text        NOT NULL,
   name       text        NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT users_email_key       UNIQUE (email),
   CONSTRAINT users_email_nonempty  CHECK (email <> ''),
   CONSTRAINT users_email_shaped    CHECK (email LIKE '%@%'),
   CONSTRAINT users_name_nonempty   CHECK (name <> '')
 );
+
+-- Login matches lower(email). UNIQUE (email) is case-sensitive, so
+-- USER4242@shop.test would sit next to user4242@shop.test. A table UNIQUE
+-- constraint cannot wrap an expression; the UNIQUE INDEX is the constraint.
+-- Recreated in db/indexes.sql under the same name (q3's expression index).
+CREATE UNIQUE INDEX users_email_lower_idx ON users (lower(email));
 
 -- A listing owned by a seller.
 CREATE TABLE products (

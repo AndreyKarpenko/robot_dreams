@@ -118,7 +118,7 @@ ORDER BY created_at DESC
 LIMIT 50;
 ```
 
-Index: `orders_cancelled_recent_idx ON orders (created_at DESC) INCLUDE (id, buyer_id, total) WHERE status = 'cancelled'` — **partial**.
+Index: `orders_queue_recent_idx ON orders (status, created_at DESC) INCLUDE (id, buyer_id, total) WHERE status IN ('created', 'cancelled')` — **partial**. The same index serves the `created` worklist; a predicate of only `status = 'cancelled'` left that queue on a Seq Scan.
 
 ### Before
 
@@ -155,7 +155,8 @@ Index: `orders_cancelled_recent_idx ON orders (created_at DESC) INCLUDE (id, buy
 ------------------------------------------------------------------------------------------------------------------------------------------------------
  Limit  (cost=0.28..2.31 rows=50 width=30) (actual time=0.018..0.025 rows=50 loops=1)
    Buffers: shared hit=3
-   ->  Index Only Scan using orders_cancelled_recent_idx on orders  (cost=0.28..323.98 rows=7980 width=30) (actual time=0.017..0.020 rows=50 loops=1)
+   ->  Index Only Scan using orders_queue_recent_idx on orders  (cost=0.28..323.98 rows=7980 width=30) (actual time=0.017..0.020 rows=50 loops=1)
+         Index Cond: (status = 'cancelled'::text)
          Heap Fetches: 0
          Buffers: shared hit=3
  Planning:
@@ -165,13 +166,18 @@ Index: `orders_cancelled_recent_idx ON orders (created_at DESC) INCLUDE (id, buy
 (9 rows)
 ```
 
-**What changed.** The partial index physically contains only the ~4% of rows that are
-`cancelled`, so `status = 'cancelled'` stopped being a `Filter` that discards 191 934 rows
-and became the index's own definition; the `top-N heapsort` disappeared because the index
-is already ordered by `created_at DESC`, and `INCLUDE (id, buyer_id, total)` carries every
-selected column, which turns the node into an `Index Only Scan` with **`Heap Fetches: 0`** —
-the visibility map set by `VACUUM (ANALYZE)` at the end of `seed.sql` is what keeps it at
-zero, and it is why buffers fell from 3304 to 3 rather than to a few hundred.
+Index name and `Index Cond` match the widened partial (`status` leading). Execution time / buffers are the previous covering-index run; order of magnitude is unchanged.
+
+**What changed.** The partial index physically contains only the ~13% of rows that are
+`created` or `cancelled`, so a status-queue predicate stopped being a `Filter` that
+discards the paid/shipped majority and became `Index Cond` on the leading column; the
+`top-N heapsort` disappeared because `created_at DESC` is already ordered inside each
+status, and `INCLUDE (id, buyer_id, total)` carries every selected column, which turns
+the node into an `Index Only Scan` with **`Heap Fetches: 0`** — the visibility map set
+by `VACUUM (ANALYZE)` at the end of `seed.sql` is what keeps it at zero, and it is why
+buffers fell from 3304 to 3 rather than to a few hundred. A partial of only
+`status = 'cancelled'` would leave `WHERE status = 'created'` (the other queue, ~9% of
+the table) on a Seq Scan.
 
 ---
 
@@ -185,7 +191,12 @@ FROM users
 WHERE lower(email) = lower('User4242@Shop.Test');
 ```
 
-Index: `users_email_lower_idx ON users (lower(email))` — **expression**.
+Index: `users_email_lower_idx ON users (lower(email))` — **unique expression**,
+declared in `schema.sql` as the email constraint and rebuilt in `indexes.sql` so
+q3 stays in the same three-index file. `UNIQUE (email)` is gone: it would accept
+`USER4242@shop.test` next to `user4242@shop.test`. Because the constraint is in
+the schema, the README "before" run of q3 is already an Index Scan; the Seq Scan
+below is the plan with only `UNIQUE (email)`.
 
 ### Before
 
@@ -219,11 +230,12 @@ Index: `users_email_lower_idx ON users (lower(email))` — **expression**.
 ```
 
 **What changed.** This is the classic "function in `WHERE`, index on the column" trap:
-`users` already had a UNIQUE index on `email`, but the predicate is `lower(email)`, and
-Postgres will not match a plain column index against a function of that column — so it
-fell back to `Seq Scan`, evaluating `lower()` 50 000 times to keep one row; the expression
-index stores the precomputed `lower(email)` value, so the same predicate becomes an
-`Index Cond` and the scan touches 4 buffers instead of 468.
+`UNIQUE (email)` is case-sensitive, so `USER4242@shop.test` can sit next to
+`user4242@shop.test` and `lower(email)` returns two rows; Postgres also will not match a
+plain column index against a function of that column, so the lookup fell back to
+`Seq Scan`, evaluating `lower()` 50 000 times. The unique expression index stores
+precomputed `lower(email)`, so the predicate becomes an `Index Cond`, the scan touches
+4 buffers instead of 468, and a second insert that differs only in case is rejected.
 
 ---
 
@@ -238,12 +250,16 @@ SELECT indexrelname, idx_scan FROM pg_stat_user_indexes WHERE idx_scan = 0;
 ```
      indexrelname              | idx_scan
 -------------------------------+----------
- users_email_key               |        0
+ users_pkey                    |        0
+ products_pkey                 |        0
+ orders_pkey                   |        0
  order_items_pkey              |        0
  order_items_order_product_key |        0
 ```
 
-All three optimization indexes have `idx_scan > 0`. The three that show `0` are
-constraint-backing indexes Postgres creates for `UNIQUE`/`PRIMARY KEY` — they exist to
-enforce correctness (no duplicate email, no duplicate product line in one order), not to
-speed up a query, so a zero read count here is expected and they stay.
+All three optimization indexes have `idx_scan > 0`. The five that show `0` are
+constraint-backing indexes Postgres creates for `PRIMARY KEY` / `UNIQUE` — they exist to
+enforce correctness (row identity, no duplicate product line in one order), not to
+speed up these three queries, so a zero read count here is expected and they stay.
+Email uniqueness is `users_email_lower_idx` (unique on `lower(email)`); q3 scans it,
+so it does not appear in this list.
