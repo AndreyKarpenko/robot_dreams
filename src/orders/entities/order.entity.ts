@@ -1,1 +1,1 @@
-export class Order {}
+export { Order } from '../../entities/order.entity';
