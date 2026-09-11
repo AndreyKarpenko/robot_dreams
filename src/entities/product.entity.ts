@@ -14,6 +14,7 @@ import { User } from './user.entity';
 @Entity({ name: 'products' })
 @Check(`"name" <> ''`)
 @Check(`"price" >= 0`)
+@Check(`"stock" >= 0`)
 export class Product {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
@@ -24,6 +25,10 @@ export class Product {
   /** Price in minor units (cents). Integer, never float. */
   @Column({ type: 'int' })
   price: number;
+
+  /** Units available for sale. Decremented atomically at checkout. */
+  @Column({ type: 'int', default: 0 })
+  stock: number;
 
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;

@@ -100,13 +100,21 @@ const ORDER_SPECS: Array<{
   },
 ];
 
-async function upsertUser(email: string, name: string): Promise<User> {
+const BUYER_BALANCE_CENTS = 10_000_000;
+const PRODUCT_STOCK = 100;
+
+async function upsertUser(
+  email: string,
+  name: string,
+  balance: number,
+): Promise<User> {
   const repo = AppDataSource.getRepository(User);
   let user = await repo.findOne({ where: { email } });
   if (!user) {
-    user = repo.create({ email, name });
+    user = repo.create({ email, name, balance });
   } else {
     user.name = name;
+    user.balance = balance;
   }
   return repo.save(user);
 }
@@ -121,9 +129,10 @@ async function upsertProduct(
     where: { name, seller: { id: seller.id } },
   });
   if (!product) {
-    product = repo.create({ name, price, seller });
+    product = repo.create({ name, price, stock: PRODUCT_STOCK, seller });
   } else {
     product.price = price;
+    product.stock = PRODUCT_STOCK;
     product.seller = seller;
   }
   return repo.save(product);
@@ -187,7 +196,8 @@ async function seed(): Promise<void> {
   try {
     const users = new Map<string, User>();
     for (const row of SEED_USERS) {
-      users.set(row.email, await upsertUser(row.email, row.name));
+      const balance = row.email.startsWith('buyer.') ? BUYER_BALANCE_CENTS : 0;
+      users.set(row.email, await upsertUser(row.email, row.name, balance));
     }
 
     const productsByName = new Map<string, Product>();

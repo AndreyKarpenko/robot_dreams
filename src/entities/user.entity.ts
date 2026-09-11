@@ -15,6 +15,7 @@ import { Product } from './product.entity';
 @Check(`"email" <> ''`)
 @Check(`"email" LIKE '%@%'`)
 @Check(`"name" <> ''`)
+@Check(`"balance" >= 0`)
 export class User {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
@@ -24,6 +25,10 @@ export class User {
 
   @Column({ type: 'text' })
   name: string;
+
+  /** Wallet balance in minor units (cents). Integer, never float. */
+  @Column({ type: 'int', default: 0 })
+  balance: number;
 
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;
