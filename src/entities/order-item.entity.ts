@@ -12,8 +12,8 @@ import { Product } from './product.entity';
 
 @Entity({ name: 'order_items' })
 @Unique('order_items_order_product_key', ['order', 'product'])
-@Check(`"quantity" >= 1`)
-@Check(`"unit_price" >= 0`)
+@Check('CHK_order_items_qty_positive', `"quantity" >= 1`)
+@Check('CHK_order_items_price_nonneg', `"unit_price" >= 0`)
 export class OrderItem {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;

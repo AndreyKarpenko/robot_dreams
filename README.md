@@ -128,7 +128,8 @@ matching `@Index` so TypeORM does not try to emit a plain column index instead).
 ### Seed idempotency
 
 Second `npm run seed` is a no-op for rows that already exist (users/products upserted
-by email/name, orders created only when the seed buyers have none). Counts after the
+by email/name; each seed order upserted by buyer+status+line items, so an interrupted
+first run is completed on the next run instead of left half-filled). Counts after the
 second run:
 
 ```bash

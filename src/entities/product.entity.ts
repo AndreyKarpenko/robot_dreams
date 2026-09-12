@@ -12,8 +12,8 @@ import { OrderItem } from './order-item.entity';
 import { User } from './user.entity';
 
 @Entity({ name: 'products' })
-@Check(`"name" <> ''`)
-@Check(`"price" >= 0`)
+@Check('CHK_products_name_nonempty', `"name" <> ''`)
+@Check('CHK_products_price_nonneg', `"price" >= 0`)
 export class Product {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
