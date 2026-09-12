@@ -86,15 +86,16 @@ npm run build
 export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
 export SKIP_VAULT=1
 npm run migrate          # creates schema
-npm run migrate:show     # [X] InitialSchema1757520000000
+npm run migrate:show     # [X] InitialSchema… and StockBalanceAndJobs…
 npm run seed             # 8 users, 10 products, 8 orders, 16 order_items
 npm run demo:nplus1
 npm run report
 ```
 
-`migrate`, `migrate:show`, `migrate:revert`, `seed`, `demo:nplus1`, and `report` all go
-through `bash scripts/with-secrets.sh dev …`. Locally that loads Infisical; the grader
-sets `SKIP_VAULT=1` so the wrapper `exec`s the command with env already in the process.
+`migrate`, `migrate:show`, `migrate:revert`, `seed`, `demo:nplus1`, `demo:race`,
+`demo:workers`, `demo:retry`, and `report` all go through `bash scripts/with-secrets.sh dev …`.
+Locally that loads Infisical; the grader sets `SKIP_VAULT=1` so the wrapper `exec`s the
+command with env already in the process.
 
 ### N+1 (order → items → product)
 
@@ -140,7 +141,39 @@ UNION ALL SELECT 'orders', count(*) FROM orders
 UNION ALL SELECT 'order_items', count(*) FROM order_items;"
 ```
 
-Expected: users 8, products 10, orders 8, order_items 16.
+Expected: users 8, products 10, orders 8, order_items 16. Buyers get a surplus
+balance (`10000000` cents); every product starts with `stock = 100`. Those two
+columns exist so checkout can fail on stock, not on money.
+
+## Конкурентність
+
+Checkout (`src/checkout.ts`) виконується в одній транзакції на одному клієнті
+пулу (`dataSource.transaction`): атомарний декремент stock, атомарне списання
+балансу, INSERT замовлення + рядка, INSERT задачі `jobs` на лист/чек. Нестача
+товару або коштів кидає помилку — TypeORM відкочує транзакцію цілком, замовлень-
+«сиріт» немає.
+
+**Чому atomic `UPDATE … RETURNING`, а не `SELECT … FOR UPDATE`.** Checkout робить
+`UPDATE products SET stock = stock - $n WHERE id = $id AND stock >= $n RETURNING`.
+Предикат і запис — один statement, тож між «перевірив stock» і «зменшив» немає
+вікна для іншої сесії. Нуль рядків = товару немає: це і перевірка, і лок.
+`SELECT … FOR UPDATE` теж коректний у тій самій транзакції, але це два round-trip
+(лок, потім UPDATE) за ту саму ізоляцію. Баланс списано тим самим патерном.
+
+**Чому retry ловить лише `40001` і `40P01`.** `40001` — `serialization_failure`
+(зіткнення знімків REPEATABLE READ / SERIALIZABLE). `40P01` — `deadlock_detected`.
+Обидва коди тимчасові: інша сесія вже закомітила або відкотилась, тому повтор
+*цілої* транзакції разом із читаннями сходиться. Інші SQLSTATE (CHECK, UNIQUE,
+мережа) не «спробуй ще раз»: ретрай зациклить сталу помилку або сховає баг.
+Повтор лише UPDATE після старого SELECT — той самий lost update, тільки довше.
+
+### Numbers from a local run
+
+| Demo | Result |
+|---|---|
+| `npm run demo:race` | 50 спроб, **10** успішних, фінальний stock **0**, рядків із відʼємним stock **0** |
+| `npm run demo:workers` | 4 воркери, 26 задач (10 `send_receipt` після race + 16 `demo_work`), розподіл 6 / 7 / 7 / 6, оброблено двічі: **0**, **968 ms** проти **3120 ms** послідовно |
+| `npm run demo:retry` | піймано **40001**, retries **1**, фінальний баланс **100** (= 2 × 50) |
 
 ## Grading
 
@@ -148,6 +181,14 @@ Expected: users 8, products 10, orders 8, order_items 16.
 docker compose up -d --wait
 export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
 export SKIP_VAULT=1    # у грейдера немає доступу до сховища
+npm ci
+npx tsc --noEmit
+npm run build
+npm run migrate
+npm run seed
+npm run demo:race
+npm run demo:workers
+npm run demo:retry
 ```
 
 ## Configuration
