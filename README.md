@@ -72,6 +72,84 @@ above.
 Measured speed-ups: **50×**, **135×**, **196×** — details in
 [`db/OPTIMIZATIONS.md`](db/OPTIMIZATIONS.md).
 
+## TypeORM (hw-13)
+
+The hw-12 schema lives in TypeORM as entities + a real migration. `synchronize` is
+**false** (also on the two expression/partial indexes the generator cannot emit).
+Money is `integer` minor units (cents), not `float` and not `numeric`.
+
+```bash
+docker compose up -d --wait
+npm ci
+npx tsc --noEmit
+npm run build
+export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
+export SKIP_VAULT=1
+npm run migrate          # creates schema
+npm run migrate:show     # [X] InitialSchema1757520000000
+npm run seed             # 8 users, 10 products, 8 orders, 16 order_items
+npm run demo:nplus1
+npm run report
+```
+
+`migrate`, `migrate:show`, `migrate:revert`, `seed`, `demo:nplus1`, and `report` all go
+through `bash scripts/with-secrets.sh dev …`. Locally that loads Infisical; the grader
+sets `SKIP_VAULT=1` so the wrapper `exec`s the command with env already in the process.
+
+### N+1 (order → items → product)
+
+Measured by `npm run demo:nplus1` (`logging: ['query']` + `QueryCountLogger`).
+
+| Strategy | Queries |
+|---|---|
+| naive (query in a loop) | **25** (N = 8 orders: 1 + 8 item loads + 16 product loads) |
+| `leftJoinAndSelect` | **1** (same for N = 3 and N = 8) |
+| `relationLoadStrategy: 'query'` | **4** (≤ 1 + 2 × 2 levels = 5; does not grow with N) |
+
+### Repository vs QueryBuilder
+
+`find()` / Repository is for loading entities you will mutate or return as objects
+(by id, unique email, a short filter). `createQueryBuilder().getRawMany()` is for
+reporting: aggregates, `GROUP BY`, and joins where hydrating `Order` graphs would be
+the wrong shape. `npm run report` is seller revenue (`SUM(quantity * unit_price)` of
+paid/shipped orders) — that cannot be expressed as `find()`.
+
+### onDelete
+
+- **RESTRICT** on `products.seller_id`, `orders.buyer_id`, `order_items.product_id`:
+  deleting a user or a product must not rewrite sales history.
+- **CASCADE** on `order_items.order_id`: line items are part of the order; removing
+  the order removes its lines.
+
+Expression unique index `users_email_lower_idx` and partial covering
+`orders_queue_recent_idx` are created in the migration (`synchronize: false` on the
+matching `@Index` so TypeORM does not try to emit a plain column index instead).
+
+### Seed idempotency
+
+Second `npm run seed` is a no-op for rows that already exist (users/products upserted
+by email/name; each seed order upserted by buyer+status+line items, so an interrupted
+first run is completed on the next run instead of left half-filled). Counts after the
+second run:
+
+```bash
+docker compose exec -T db psql -U admin -d shop -c "
+SELECT 'users' AS t, count(*) FROM users
+UNION ALL SELECT 'products', count(*) FROM products
+UNION ALL SELECT 'orders', count(*) FROM orders
+UNION ALL SELECT 'order_items', count(*) FROM order_items;"
+```
+
+Expected: users 8, products 10, orders 8, order_items 16.
+
+## Grading
+
+```bash
+docker compose up -d --wait
+export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
+export SKIP_VAULT=1    # у грейдера немає доступу до сховища
+```
+
 ## Configuration
 
 Zod validates env on boot (`src/config/env.schema.ts` → `ConfigModule.forRoot({ validate })`). A broken variable kills the process before HTTP starts. The Postgres password is **not** an env var: the pool reads `secrets/db_password` on every new connection.

@@ -1,1 +1,1 @@
-export class Product {}
+export { Product } from '../../entities/product.entity';

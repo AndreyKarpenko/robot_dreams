@@ -7,6 +7,7 @@
 # secrets
 /secrets/*
 !/secrets/*.example
+.secrets/
 
 # Logs
 logs
