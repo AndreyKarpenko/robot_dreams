@@ -15,8 +15,11 @@ import { User } from './user.entity';
 @Entity({ name: 'orders' })
 @Index('orders_buyer_created_idx', ['buyer', 'createdAt'])
 @Index('orders_queue_recent_idx', { synchronize: false })
-@Check(`"status" IN ('created', 'paid', 'shipped', 'cancelled')`)
-@Check(`"total" >= 0`)
+@Check(
+  'CHK_orders_status_allowed',
+  `"status" IN ('created', 'paid', 'shipped', 'cancelled')`,
+)
+@Check('CHK_orders_total_nonneg', `"total" >= 0`)
 export class Order {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;

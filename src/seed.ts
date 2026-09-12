@@ -138,56 +138,96 @@ async function upsertProduct(
   return repo.save(product);
 }
 
-async function seedOrders(
+function productNamesKey(names: string[]): string {
+  return [...names].sort().join('\0');
+}
+
+async function findSeedOrder(
+  buyer: User,
+  spec: (typeof ORDER_SPECS)[number],
+): Promise<Order | null> {
+  const orderRepo = AppDataSource.getRepository(Order);
+  const wanted = productNamesKey(spec.lines.map((line) => line.productName));
+  const candidates = await orderRepo.find({
+    where: { buyer: { id: buyer.id }, status: spec.status },
+    relations: { items: { product: true } },
+  });
+
+  const complete = candidates.find(
+    (order) =>
+      productNamesKey(order.items.map((item) => item.product.name)) === wanted,
+  );
+  if (complete) {
+    return complete;
+  }
+
+  // Interrupted insert: header exists, lines were not written yet.
+  return (
+    candidates.find((order) => order.items.length === 0) ?? null
+  );
+}
+
+async function upsertOrder(
+  spec: (typeof ORDER_SPECS)[number],
   users: Map<string, User>,
   productsByName: Map<string, Product>,
 ): Promise<void> {
   const orderRepo = AppDataSource.getRepository(Order);
   const itemRepo = AppDataSource.getRepository(OrderItem);
-  const existing = await orderRepo
-    .createQueryBuilder('ord')
-    .innerJoin('ord.buyer', 'buyer')
-    .where('buyer.email IN (:...emails)', {
-      emails: SEED_USERS.map((row) => row.email),
-    })
-    .getCount();
-  if (existing > 0) {
-    return;
+  const buyer = users.get(spec.buyerEmail);
+  if (!buyer) {
+    throw new Error(`Unknown seed buyer ${spec.buyerEmail}`);
   }
 
-  for (const spec of ORDER_SPECS) {
-    const buyer = users.get(spec.buyerEmail);
-    if (!buyer) {
-      throw new Error(`Unknown seed buyer ${spec.buyerEmail}`);
+  const lines = spec.lines.map((line) => {
+    const product = productsByName.get(line.productName);
+    if (!product) {
+      throw new Error(`Unknown seed product ${line.productName}`);
     }
-    const lines = spec.lines.map((line) => {
-      const product = productsByName.get(line.productName);
-      if (!product) {
-        throw new Error(`Unknown seed product ${line.productName}`);
-      }
-      return {
-        product,
-        quantity: line.quantity,
-        unitPrice: product.price,
-      };
-    });
-    const total = lines.reduce(
-      (sum, line) => sum + line.unitPrice * line.quantity,
-      0,
-    );
-    const order = await orderRepo.save(
+    return {
+      product,
+      quantity: line.quantity,
+      unitPrice: product.price,
+    };
+  });
+  const total = lines.reduce(
+    (sum, line) => sum + line.unitPrice * line.quantity,
+    0,
+  );
+
+  let order = await findSeedOrder(buyer, spec);
+  if (!order) {
+    order = await orderRepo.save(
       orderRepo.create({ buyer, status: spec.status, total }),
     );
-    await itemRepo.save(
-      lines.map((line) =>
+  } else if (order.total !== total) {
+    order.total = total;
+    await orderRepo.save(order);
+  }
+
+  for (const line of lines) {
+    const existingItem = await itemRepo.findOne({
+      where: { orderId: order.id, productId: line.product.id },
+    });
+    if (!existingItem) {
+      await itemRepo.save(
         itemRepo.create({
           order,
           product: line.product,
           quantity: line.quantity,
           unitPrice: line.unitPrice,
         }),
-      ),
-    );
+      );
+    }
+  }
+}
+
+async function seedOrders(
+  users: Map<string, User>,
+  productsByName: Map<string, Product>,
+): Promise<void> {
+  for (const spec of ORDER_SPECS) {
+    await upsertOrder(spec, users, productsByName);
   }
 }
 

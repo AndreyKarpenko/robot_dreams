@@ -12,10 +12,10 @@ import { Product } from './product.entity';
 
 @Entity({ name: 'users' })
 @Index('users_email_lower_idx', { synchronize: false })
-@Check(`"email" <> ''`)
-@Check(`"email" LIKE '%@%'`)
-@Check(`"name" <> ''`)
-@Check(`"balance" >= 0`)
+@Check('CHK_users_email_nonempty', `"email" <> ''`)
+@Check('CHK_users_email_shaped', `"email" LIKE '%@%'`)
+@Check('CHK_users_name_nonempty', `"name" <> ''`)
+@Check('CHK_users_balance_nonneg', `"balance" >= 0`)
 export class User {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;

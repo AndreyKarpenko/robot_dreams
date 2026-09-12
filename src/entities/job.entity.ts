@@ -9,9 +9,9 @@ import {
 
 @Entity({ name: 'jobs' })
 @Index('jobs_pending_idx', { synchronize: false })
-@Check(`"kind" <> ''`)
-@Check(`"status" IN ('pending', 'done')`)
-@Check(`"processed" >= 0`)
+@Check('CHK_jobs_kind_nonempty', `"kind" <> ''`)
+@Check('CHK_jobs_status_allowed', `"status" IN ('pending', 'done')`)
+@Check('CHK_jobs_processed_nonneg', `"processed" >= 0`)
 export class Job {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;

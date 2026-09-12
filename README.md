@@ -86,7 +86,7 @@ npm run build
 export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
 export SKIP_VAULT=1
 npm run migrate          # creates schema
-npm run migrate:show     # [X] InitialSchema1757520000000
+npm run migrate:show     # [X] InitialSchema… and StockBalanceAndJobs…
 npm run seed             # 8 users, 10 products, 8 orders, 16 order_items
 npm run demo:nplus1
 npm run report
@@ -129,7 +129,8 @@ matching `@Index` so TypeORM does not try to emit a plain column index instead).
 ### Seed idempotency
 
 Second `npm run seed` is a no-op for rows that already exist (users/products upserted
-by email/name, orders created only when the seed buyers have none). Counts after the
+by email/name; each seed order upserted by buyer+status+line items, so an interrupted
+first run is completed on the next run instead of left half-filled). Counts after the
 second run:
 
 ```bash
