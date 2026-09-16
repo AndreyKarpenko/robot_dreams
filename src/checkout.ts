@@ -21,19 +21,63 @@ export type CheckoutResult = {
 type ProductRow = { id: string; stock: number; price: number };
 type UserRow = { id: string; balance: number };
 
-/** TypeORM's pg driver returns `[rows, rowCount]` for UPDATE/DELETE. */
-function returningRows<T>(raw: unknown): T[] {
-  if (!Array.isArray(raw)) {
+function isRowObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Unwrap T[] or TypeORM's `[rows, rowCount]` tuple. */
+function coerceRowArray<T>(raw: unknown[]): T[] | undefined {
+  if (raw.length === 0) {
     return [];
   }
-  const first = raw[0];
-  if (Array.isArray(first)) {
-    return first as T[];
+  if (
+    raw.length === 2 &&
+    Array.isArray(raw[0]) &&
+    (typeof raw[1] === 'number' || raw[1] == null)
+  ) {
+    return raw[0] as T[];
   }
-  if (first !== null && typeof first === 'object') {
+  if (isRowObject(raw[0])) {
     return raw as T[];
   }
-  return [];
+  return undefined;
+}
+
+/**
+ * Normalize UPDATE/INSERT … RETURNING from TypeORM/pg.
+ * Unknown shapes throw — they must not be treated as "zero rows".
+ */
+function returningRows<T>(raw: unknown): T[] {
+  const candidates: unknown[][] = [];
+  if (Array.isArray(raw)) {
+    candidates.push(raw);
+  } else if (isRowObject(raw)) {
+    for (const key of ['rows', 'records', 'raw'] as const) {
+      const nested = raw[key];
+      if (Array.isArray(nested)) {
+        candidates.push(nested);
+      }
+    }
+  } else {
+    throw new CheckoutError('unexpected RETURNING result shape');
+  }
+
+  let sawEmpty = false;
+  for (const candidate of candidates) {
+    const rows = coerceRowArray<T>(candidate);
+    if (rows === undefined) {
+      continue;
+    }
+    if (rows.length > 0) {
+      return rows;
+    }
+    sawEmpty = true;
+  }
+
+  if (sawEmpty) {
+    return [];
+  }
+  throw new CheckoutError('unexpected RETURNING result shape');
 }
 
 /**

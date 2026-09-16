@@ -20,6 +20,7 @@ export function isRetryableSerialization(err: unknown): boolean {
 export type RetryOptions = {
   maxAttempts?: number;
   baseDelayMs?: number;
+  maxDelayMs?: number;
   onRetry?: (info: { code: string; attempt: number }) => void;
 };
 
@@ -38,6 +39,7 @@ export async function withRetry<T>(
 ): Promise<T> {
   const maxAttempts = options.maxAttempts ?? 12;
   const baseDelayMs = options.baseDelayMs ?? 15;
+  const maxDelayMs = options.maxDelayMs ?? 500;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
@@ -52,9 +54,9 @@ export async function withRetry<T>(
         throw err;
       }
       options.onRetry?.({ code, attempt });
-      const backoff = baseDelayMs * 2 ** (attempt - 1);
+      const backoff = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
       const jitter = Math.floor(Math.random() * baseDelayMs);
-      await sleep(backoff + jitter);
+      await sleep(Math.min(backoff + jitter, maxDelayMs));
     }
   }
 

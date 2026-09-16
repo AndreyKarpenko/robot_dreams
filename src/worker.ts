@@ -44,8 +44,8 @@ export async function claimAndProcessJob(
 }
 
 /**
- * Drain pending jobs. An empty SKIP LOCKED result means "none free right now",
- * not "queue empty" — re-check pending count before the worker exits.
+ * Drain pending jobs. SKIP LOCKED returning nothing only means "none free
+ * right now" — keep polling until the pending count is actually 0.
  */
 export async function drainQueue(
   dataSource: DataSource,
@@ -53,13 +53,11 @@ export async function drainQueue(
   workMs = JOB_WORK_MS,
 ): Promise<number> {
   let handled = 0;
-  let emptyStreak = 0;
 
-  while (emptyStreak < 20) {
+  for (;;) {
     const got = await claimAndProcessJob(dataSource, workerId, workMs);
     if (got) {
       handled += 1;
-      emptyStreak = 0;
       continue;
     }
 
@@ -69,7 +67,6 @@ export async function drainQueue(
     if (pending === 0) {
       break;
     }
-    emptyStreak += 1;
     await sleep(20);
   }
 
