@@ -4,6 +4,9 @@
 /build
 /spec.json
 
+# local pg_dump artifacts (hw-15)
+/backups/
+
 # secrets
 /secrets/*
 !/secrets/*.example
