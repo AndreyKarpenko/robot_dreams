@@ -175,6 +175,22 @@ Checkout (`src/checkout.ts`) виконується в одній транзак
 | `npm run demo:workers` | 4 воркери, 26 задач (10 `send_receipt` після race + 16 `demo_work`), розподіл 6 / 7 / 7 / 6, оброблено двічі: **0**, **968 ms** проти **3120 ms** послідовно |
 | `npm run demo:retry` | піймано **40001**, retries **1**, фінальний баланс **100** (= 2 × 50) |
 
+## Data layer ops
+
+Застосунок ходить у `shop` через **PgBouncer** (`127.0.0.1:6432`), не в Postgres напряму (`:5432`). Пулер у `transaction` mode: серверний конект зайнятий лише поки відкрита транзакція, тому десятки інстансів API (#28) ділять `default_pool_size = 10`, а не тримають по довгому backend-процесу на кожен HTTP-клієнт. Ціна така: сесійний стан не переживає `COMMIT`. Ламаються щонайменше named prepared statements (наступний запит може потрапити на інший backend — тому в `pgbouncer.ini` стоїть `max_prepared_statements = 200`), сесійні `SET` / `search_path`, і `LISTEN/NOTIFY` (підписка прив’язана до конекта, який після транзакції віддають іншому клієнту). Те саме з тимчасовими таблицями й курсорами `WITH HOLD`.
+
+Підняти стек, бекап, відновитись:
+
+```bash
+docker compose up -d --wait
+export DATABASE_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:6432/shop
+export SKIP_VAULT=1
+bash scripts/with-secrets.sh dev bash scripts/backup.sh          # → backups/shop-YYYY-MM-DD.dump
+bash scripts/with-secrets.sh dev bash scripts/restore-drill.sh  # scratch Postgres, друкує MATCH
+```
+
+Розклад нічного дампу — [`backup.cron`](backup.cron). Протокол drill-у (RTO/RPO) — [`RESTORE-DRILL.md`](RESTORE-DRILL.md). Міграції TypeORM лишайте на `:5432`: DDL через transaction pooling часто падає.
+
 ## Grading
 
 ```bash
@@ -190,6 +206,16 @@ npm run demo:race
 npm run demo:workers
 npm run demo:retry
 ```
+
+```bash
+docker compose up -d --wait
+export DATABASE_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:6432/shop
+export SKIP_VAULT=1    # у грейдера немає доступу до сховища
+bash scripts/with-secrets.sh dev bash scripts/backup.sh
+bash scripts/with-secrets.sh dev bash scripts/restore-drill.sh
+```
+
+`backup.sh` і `restore-drill.sh` читають `DATABASE_URL` з оточення. Обгортка з `SKIP_VAULT=1` просто виконує команду; без `DATABASE_URL` голий `bash scripts/backup.sh` падає з `DATABASE_URL: unbound variable`.
 
 ## Configuration
 

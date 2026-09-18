@@ -16,3 +16,19 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+
+  pgbouncer:
+    image: edoburu/pgbouncer
+    ports:
+      - '6432:5432'
+    volumes:
+      - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p 5432 -U admin']
+      interval: 2s
+      timeout: 2s
+      retries: 15
