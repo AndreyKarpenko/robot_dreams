@@ -294,18 +294,103 @@ $ npm run start:dev
 $ npm run start:prod
 ```
 
-## Run tests
+## Тестування (hw-16)
+
+Docker має бути запущений: integration, e2e і provider verification піднімають `postgres:16-alpine` через `@testcontainers/postgresql`. `DATABASE_URL` для тестів видає контейнер (`container.getConnectionUri()`) — сховище секретів для цього не потрібне.
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm ci
+npx tsc --noEmit
+npm run test                 # unit
+npm run test:integration     # репозиторії проти Postgres
+npm run test:e2e             # Nest + supertest, create → read + 400/404
+npm run test:contract        # consumer Pact → pacts/*.json
+npm run verify:provider      # справжній застосунок проти контракту
 ```
+
+`pacts/` генерує `npm run test:contract` і лежить у репо, щоб `verify:provider` працював на свіжому клоні без попереднього consumer-прогону.
+
+### Ізоляція
+
+Інтеграційні тести відкривають `BEGIN` у `beforeEach` і роблять `ROLLBACK` у `afterEach`. Репозиторії приймають `Queryable` (Pool або клієнт з `query()`), тож у тесті їм віддається клієнт відкритої транзакції, а не пул. Після ROLLBACK unique/FK знову вільні, тому `npm run test:integration && npm run test:integration` зелений без ручної чистки БД. Схему міграції накатуємо один раз на контейнер; identity-послідовності після ROLLBACK не відкочуються — билдери завжди генерують унікальні email/name.
+
+### Pact Broker локально
+
+```bash
+docker compose up -d --wait   # брокер на http://127.0.0.1:9292, healthcheck на 127.0.0.1
+```
+
+Локально URL і токен брокера приїжджають зі сховища ДЗ #11: `bash scripts/with-secrets.sh dev npm run verify:provider`. Якщо `SKIP_VAULT=1`, обгортка просто виконує команду з уже заданим оточенням. Грейдер (і CI) передають змінні напряму: `PACT_BROKER_URL=http://127.0.0.1:9292 npm run verify:provider`. Код читає лише `process.env.PACT_BROKER_URL` / `PACT_BROKER_TOKEN`. Дефолт `http://127.0.0.1:9292` — адреса compose, не секрет. Без `PACT_BROKER_URL` верифікація йде по локальному `pacts/*.json`.
+
+Consumer `MarketplaceWeb` / provider `MarketplaceAPI`, версії `1.0.0`. Локальний гейт (порядок обовʼязковий; крок із тегом `prod` пропускати не можна):
+
+```bash
+docker compose up -d --wait
+
+curl -sS -o /tmp/pact-publish.json -w "%{http_code}\n" -X PUT \
+  -H "Content-Type: application/json" \
+  --data-binary @pacts/MarketplaceWeb-MarketplaceAPI.json \
+  http://127.0.0.1:9292/pacts/provider/MarketplaceAPI/consumer/MarketplaceWeb/version/1.0.0
+# 201
+
+PACT_BROKER_URL=http://127.0.0.1:9292 npm run verify:provider
+
+curl -sS "http://127.0.0.1:9292/can-i-deploy?pacticipant=MarketplaceWeb&version=1.0.0&to=prod"
+```
+
+До тега `prod` брокер чесно каже unknown:
+
+```json
+{
+  "summary": {
+    "deployable": null,
+    "reason": "There is no verified pact between version 1.0.0 of MarketplaceWeb and the latest version of MarketplaceAPI with tag prod (no such version exists)",
+    "success": 0,
+    "failed": 0,
+    "unknown": 1
+  }
+}
+```
+
+Повний вивід:
+
+```json
+{"summary":{"deployable":null,"reason":"There is no verified pact between version 1.0.0 of MarketplaceWeb and the latest version of MarketplaceAPI with tag prod (no such version exists)","success":0,"failed":0,"unknown":1},"notices":[{"type":"error","text":"There is no verified pact between version 1.0.0 of MarketplaceWeb and the latest version of MarketplaceAPI with tag prod (no such version exists)"}],"matrix":[{"consumer":{"name":"MarketplaceWeb","version":{"number":"1.0.0","branch":null,"branches":[],"branchVersions":[],"environments":[],"_links":{"self":{"href":"http://127.0.0.1:9292/pacticipants/MarketplaceWeb/versions/1.0.0"}},"tags":[]},"_links":{"self":{"href":"http://127.0.0.1:9292/pacticipants/MarketplaceWeb"}}},"provider":{"name":"MarketplaceAPI","version":null,"_links":{"self":{"href":"http://127.0.0.1:9292/pacticipants/MarketplaceAPI"}}},"pact":{"createdAt":"2026-09-18T14:01:13+00:00","_links":{"self":{"href":"http://127.0.0.1:9292/pacts/provider/MarketplaceAPI/consumer/MarketplaceWeb/version/1.0.0"}}},"verificationResult":null}]}
+```
+
+Тег ставиться на **версію провайдера**, ту саму, що `providerVersion` у Verifier:
+
+```bash
+curl -sS -o /dev/stderr -w "%{http_code}\n" -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{}' \
+  http://127.0.0.1:9292/pacticipants/MarketplaceAPI/versions/1.0.0/tags/prod
+# 201
+
+curl -sS "http://127.0.0.1:9292/can-i-deploy?pacticipant=MarketplaceWeb&version=1.0.0&to=prod"
+```
+
+Після тега гейт відкривається:
+
+```json
+{
+  "summary": {
+    "deployable": true,
+    "reason": "All required verification results are published and successful",
+    "success": 1,
+    "failed": 0,
+    "unknown": 0
+  }
+}
+```
+
+Повний вивід:
+
+```json
+{"summary":{"deployable":true,"reason":"All required verification results are published and successful","success":1,"failed":0,"unknown":0},"notices":[{"type":"success","text":"All required verification results are published and successful"}],"matrix":[{"consumer":{"name":"MarketplaceWeb","version":{"number":"1.0.0","branch":null,"branches":[],"branchVersions":[],"environments":[],"_links":{"self":{"href":"http://127.0.0.1:9292/pacticipants/MarketplaceWeb/versions/1.0.0"}},"tags":[]},"_links":{"self":{"href":"http://127.0.0.1:9292/pacticipants/MarketplaceWeb"}}},"provider":{"name":"MarketplaceAPI","version":{"number":"1.0.0","branch":"prod","branches":[{"name":"prod","latest":true,"_links":{"self":{"title":"Branch version","name":"prod","href":"http://127.0.0.1:9292/pacticipants/MarketplaceAPI/branches/prod/versions/1.0.0"}}}],"branchVersions":[{"name":"prod","latest":true,"_links":{"self":{"title":"Branch version","name":"prod","href":"http://127.0.0.1:9292/pacticipants/MarketplaceAPI/branches/prod/versions/1.0.0"}}}],"environments":[],"_links":{"self":{"href":"http://127.0.0.1:9292/pacticipants/MarketplaceAPI/versions/1.0.0"}},"tags":[{"name":"prod","latest":true,"_links":{"self":{"href":"http://127.0.0.1:9292/pacticipants/MarketplaceAPI/versions/1.0.0/tags/prod"}}}]},"_links":{"self":{"href":"http://127.0.0.1:9292/pacticipants/MarketplaceAPI"}}},"pact":{"createdAt":"2026-09-18T14:01:13+00:00","_links":{"self":{"href":"http://127.0.0.1:9292/pacts/provider/MarketplaceAPI/consumer/MarketplaceWeb/version/1.0.0"}}},"verificationResult":{"success":true,"verifiedAt":"2026-09-18T14:01:17+00:00","_links":{"self":{"href":"http://127.0.0.1:9292/pacts/provider/MarketplaceAPI/consumer/MarketplaceWeb/pact-version/f5a5bd1abf4dc77b7953da7ce0f375be0fd9c930/metadata/Y3ZuPTEuMC4w/verification-results/200"}}}}]}
+```
+
+У CI job `contract` робить publish → verify (`publishVerificationResult: true`) → can-i-deploy. `PACT_BROKER_URL` / `PACT_BROKER_TOKEN` — GitHub secrets; локальний compose підставляється, якщо секрет порожній.
 
 ## Deployment
 

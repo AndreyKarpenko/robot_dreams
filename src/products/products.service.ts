@@ -1,26 +1,40 @@
-import { Injectable } from '@nestjs/common';
-import { CreateProductDto } from './dto/create-product.dto';
-import { UpdateProductDto } from './dto/update-product.dto';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { ProductRow, ProductsRepository } from './products.repository';
+
+export type ProductResponse = {
+  id: number;
+  name: string;
+  price_cents: number;
+};
 
 @Injectable()
 export class ProductsService {
-  create(createProductDto: CreateProductDto) {
-    return 'This action adds a new product';
+  constructor(private readonly products: ProductsRepository) {}
+
+  async findAll(): Promise<{
+    items: ProductResponse[];
+    next_cursor: null;
+  }> {
+    const rows = await this.products.list(20);
+    return {
+      items: rows.map(toProductResponse),
+      next_cursor: null,
+    };
   }
 
-  findAll() {
-    return `This action returns all products`;
+  async findOne(id: number): Promise<ProductResponse> {
+    const row = await this.products.findById(id);
+    if (!row) {
+      throw new NotFoundException();
+    }
+    return toProductResponse(row);
   }
+}
 
-  findOne(id: number) {
-    return `This action returns a #${id} product`;
-  }
-
-  update(id: number, updateProductDto: UpdateProductDto) {
-    return `This action updates a #${id} product`;
-  }
-
-  remove(id: number) {
-    return `This action removes a #${id} product`;
-  }
+export function toProductResponse(row: ProductRow): ProductResponse {
+  return {
+    id: Number(row.id),
+    name: row.name,
+    price_cents: row.price,
+  };
 }
