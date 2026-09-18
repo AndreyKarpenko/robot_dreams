@@ -37,7 +37,7 @@ if [ "${#dumps[@]}" -eq 0 ]; then
 fi
 DUMP="$(ls -t "${dumps[@]}" | head -n 1)"
 
-NAME="shop-restore-drill"
+NAME="shop-restore-drill-$$"
 cleanup() {
   docker rm -fv "$NAME" >/dev/null 2>&1 || true
 }
