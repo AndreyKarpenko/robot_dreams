@@ -9,7 +9,7 @@ module.exports = {
   reporters: ['default'],
   maxWorkers: 1,
   testTimeout: 120000,
-  setupFiles: ['reflect-metadata'],
+  setupFiles: ['reflect-metadata', '<rootDir>/test/jest-env-setup.js'],
   transformIgnorePatterns: [
     'node_modules/(?!(@nestjs/config|dotenv-expand|es-toolkit)/)',
   ],

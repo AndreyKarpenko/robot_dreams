@@ -13,17 +13,23 @@ function buildPool(config: ConfigService<Env, true>): Pool {
   // Tests get DATABASE_URL from testcontainers (password in the URI).
   // The running app still uses DB_URL + secrets/db_password.
   const databaseUrl = process.env.DATABASE_URL;
-  const dbUrl = new URL(databaseUrl ?? config.get('DB_URL', { infer: true }));
-  const passwordFromUrl = decodeURIComponent(dbUrl.password);
+  if (databaseUrl) {
+    const pool = new Pool({ connectionString: databaseUrl, max: 3 });
+    pool.on('error', (err) => {
+      console.error(
+        `pg pool closed an idle client (${err.message}) — a new connection will be opened`,
+      );
+    });
+    return pool;
+  }
+
+  const dbUrl = new URL(config.get('DB_URL', { infer: true }));
   const pool = new Pool({
     host: dbUrl.hostname,
     port: Number(dbUrl.port) || 5432,
     database: dbUrl.pathname.replace(/^\//, '').split('?')[0],
     user: decodeURIComponent(dbUrl.username),
-    password:
-      databaseUrl && passwordFromUrl
-        ? passwordFromUrl
-        : async () => (await readFile(SECRET_FILE, 'utf8')).trim(),
+    password: async () => (await readFile(SECRET_FILE, 'utf8')).trim(),
     max: 3,
   });
 
