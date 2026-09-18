@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run test:integration
+      - run: npm run test:e2e
+      - run: npm run test:contract
+
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PACT_BROKER_URL: ${{ secrets.PACT_BROKER_URL }}
+      PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+      PACT_CONSUMER_VERSION: '1.0.0'
+      PACT_PROVIDER_VERSION: '1.0.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Start Pact Broker
+        run: docker compose up -d --wait
+      - name: Generate contract
+        run: npm run test:contract
+      - name: Publish contract
+        run: |
+          : "${PACT_BROKER_URL:=http://127.0.0.1:9292}"
+          AUTH=()
+          if [ -n "${PACT_BROKER_TOKEN:-}" ]; then
+            AUTH=(-H "Authorization: Bearer ${PACT_BROKER_TOKEN}")
+          fi
+          code=$(curl -sS -o /tmp/pact-publish.json -w "%{http_code}" \
+            -X PUT \
+            "${AUTH[@]}" \
+            -H "Content-Type: application/json" \
+            --data-binary @pacts/MarketplaceWeb-MarketplaceAPI.json \
+            "${PACT_BROKER_URL}/pacts/provider/MarketplaceAPI/consumer/MarketplaceWeb/version/${PACT_CONSUMER_VERSION}")
+          cat /tmp/pact-publish.json
+          test "$code" = "201" || test "$code" = "200"
+      - name: Verify provider
+        run: |
+          : "${PACT_BROKER_URL:=http://127.0.0.1:9292}"
+          export PACT_BROKER_URL
+          npm run verify:provider
+      - name: Tag provider version as prod
+        run: |
+          : "${PACT_BROKER_URL:=http://127.0.0.1:9292}"
+          AUTH=()
+          if [ -n "${PACT_BROKER_TOKEN:-}" ]; then
+            AUTH=(-H "Authorization: Bearer ${PACT_BROKER_TOKEN}")
+          fi
+          curl -fsS -X PUT \
+            "${AUTH[@]}" \
+            -H "Content-Type: application/json" \
+            -d '{}' \
+            "${PACT_BROKER_URL}/pacticipants/MarketplaceAPI/versions/${PACT_PROVIDER_VERSION}/tags/prod"
+      - name: can-i-deploy
+        run: |
+          : "${PACT_BROKER_URL:=http://127.0.0.1:9292}"
+          AUTH=()
+          if [ -n "${PACT_BROKER_TOKEN:-}" ]; then
+            AUTH=(-H "Authorization: Bearer ${PACT_BROKER_TOKEN}")
+          fi
+          body=$(curl -fsS "${AUTH[@]}" \
+            "${PACT_BROKER_URL}/can-i-deploy?pacticipant=MarketplaceWeb&version=${PACT_CONSUMER_VERSION}&to=prod")
+          echo "$body"
+          python3 -c 'import json,sys; d=json.load(sys.stdin); s=d.get("summary", d); raise SystemExit(0 if s.get("deployable") is True else 1)' <<<"$body"

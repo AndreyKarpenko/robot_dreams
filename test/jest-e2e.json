@@ -1,9 +1,16 @@
 {
   "moduleFileExtensions": ["js", "json", "ts"],
-  "rootDir": ".",
+  "rootDir": "..",
   "testEnvironment": "node",
-  "testRegex": ".e2e-spec.ts$",
+  "testMatch": ["<rootDir>/test/e2e/**/*.e2e-spec.ts"],
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
-  }
+  },
+  "reporters": ["default"],
+  "maxWorkers": 1,
+  "testTimeout": 120000,
+  "setupFiles": ["reflect-metadata"],
+  "transformIgnorePatterns": [
+    "node_modules/(?!(@nestjs/config|dotenv-expand|es-toolkit)/)"
+  ]
 }

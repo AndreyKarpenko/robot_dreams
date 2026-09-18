@@ -32,3 +32,43 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+
+  pact-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pact
+      POSTGRES_PASSWORD: pact
+      POSTGRES_DB: pact_broker
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U pact -d pact_broker']
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  pact-broker:
+    image: pactfoundation/pact-broker:latest
+    ports:
+      - '9292:9292'
+    depends_on:
+      pact-db:
+        condition: service_healthy
+    environment:
+      PACT_BROKER_PORT: '9292'
+      PACT_BROKER_DATABASE_URL: postgres://pact:pact@pact-db:5432/pact_broker
+      PACT_BROKER_DATABASE_CONNECT_MAX_RETRIES: '10'
+      PACT_BROKER_LOG_LEVEL: INFO
+      PACT_BROKER_PUBLIC_HEARTBEAT: 'true'
+      PACT_BROKER_BASE_URL: >-
+        http://127.0.0.1:9292 http://localhost:9292 http://pact-broker:9292
+    healthcheck:
+      # 127.0.0.1, not localhost: inside the container localhost can be ::1,
+      # and puma listens on IPv4 only.
+      test:
+        [
+          'CMD-SHELL',
+          'wget -q --tries=1 --spider http://127.0.0.1:9292/diagnostic/status/heartbeat || exit 1',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
