@@ -7,12 +7,15 @@ import {
 import { Pool } from 'pg';
 import { PG_POOL } from '../db/database.module';
 import { CreateOrderDto } from './dto/create-order.dto';
-import { OrdersRepository } from './orders.repository';
+import { OrderStatus } from './dto/update-order-status.dto';
+import { OrderEventsService } from './order-events.service';
+import { OrderRow, OrdersRepository } from './orders.repository';
 import { ProductsRepository } from '../products/products.repository';
 
 export type OrderResponse = {
   id: number;
   status: string;
+  buyer_id: number;
   items: Array<{
     product_id: number;
     quantity: number;
@@ -26,6 +29,7 @@ export class OrdersService {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly orders: OrdersRepository,
+    private readonly orderEvents: OrderEventsService,
   ) {}
 
   async create(dto: CreateOrderDto): Promise<OrderResponse> {
@@ -110,10 +114,37 @@ export class OrdersService {
     }
     return toOrderResponse(found.order, found);
   }
+
+  async updateStatus(id: number, status: OrderStatus): Promise<OrderResponse> {
+    const client = await this.pool.connect();
+    let updated: OrderRow;
+    try {
+      await client.query('BEGIN');
+      const orders = new OrdersRepository(client);
+      const row = await orders.updateStatus(id, status);
+      if (!row) {
+        throw new NotFoundException();
+      }
+      await client.query('COMMIT');
+      updated = row;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    this.orderEvents.publish(Number(updated.id), updated.status);
+    const found = await this.orders.findByIdWithItems(updated.id);
+    if (!found) {
+      throw new NotFoundException();
+    }
+    return toOrderResponse(found.order, found);
+  }
 }
 
 function toOrderResponse(
-  order: { id: string; status: string; total: number },
+  order: { id: string; status: string; total: number; buyer_id: string },
   found: {
     items: Array<{ product_id: string; quantity: number; unit_price: number }>;
   },
@@ -121,6 +152,7 @@ function toOrderResponse(
   return {
     id: Number(order.id),
     status: order.status,
+    buyer_id: Number(order.buyer_id),
     items: found.items.map((item) => ({
       product_id: Number(item.product_id),
       quantity: item.quantity,
