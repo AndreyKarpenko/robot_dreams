@@ -11,8 +11,24 @@ import {
   PACT_CONSUMER,
   PACT_PROVIDER,
   PACT_PROVIDER_VERSION,
+  PRODUCT_AVAILABLE_TO_ORDER_STATE,
   PRODUCT_EXISTS_STATE,
 } from './pact.constants';
+
+async function seedProductOne(pool: Pool): Promise<void> {
+  await pool.query(
+    `INSERT INTO users (id, email, name, balance)
+     OVERRIDING SYSTEM VALUE
+     VALUES (1, 'seller.pact@shop.test', 'Pact Seller', 0)
+     ON CONFLICT ((lower(email))) DO NOTHING`,
+  );
+  await pool.query(
+    `INSERT INTO products (id, name, price, stock, seller_id)
+     OVERRIDING SYSTEM VALUE
+     VALUES (1, 'Ceramic mug', 1299, 10, 1)
+     ON CONFLICT (id) DO NOTHING`,
+  );
+}
 
 export async function verifyProvider(): Promise<void> {
   const db: TestDb = await startTestDb();
@@ -34,27 +50,15 @@ export async function verifyProvider(): Promise<void> {
       provider: PACT_PROVIDER,
       providerBaseUrl,
       providerVersion: PACT_PROVIDER_VERSION,
-      pactUrls: [
-        path.resolve(
-          process.cwd(),
-          'pacts',
-          `${PACT_CONSUMER}-${PACT_PROVIDER}.json`,
-        ),
-      ],
       logLevel: 'info',
       stateHandlers: {
         [PRODUCT_EXISTS_STATE]: async () => {
+          await seedProductOne(pool);
+        },
+        [PRODUCT_AVAILABLE_TO_ORDER_STATE]: async () => {
+          await seedProductOne(pool);
           await pool.query(
-            `INSERT INTO users (id, email, name, balance)
-             OVERRIDING SYSTEM VALUE
-             VALUES (1, 'seller.pact@shop.test', 'Pact Seller', 0)
-             ON CONFLICT ((lower(email))) DO NOTHING`,
-          );
-          await pool.query(
-            `INSERT INTO products (id, name, price, stock, seller_id)
-             OVERRIDING SYSTEM VALUE
-             VALUES (1, 'Ceramic mug', 1299, 10, 1)
-             ON CONFLICT (id) DO NOTHING`,
+            `UPDATE users SET balance = GREATEST(balance, 1000000) WHERE id = 1`,
           );
         },
       },
@@ -63,9 +67,20 @@ export async function verifyProvider(): Promise<void> {
     if (brokerUrl) {
       options.pactBrokerUrl = brokerUrl;
       options.publishVerificationResult = true;
+      options.consumerVersionSelectors = [
+        { consumer: PACT_CONSUMER, latest: true },
+      ];
       if (brokerToken) {
         options.pactBrokerToken = brokerToken;
       }
+    } else {
+      options.pactUrls = [
+        path.resolve(
+          process.cwd(),
+          'pacts',
+          `${PACT_CONSUMER}-${PACT_PROVIDER}.json`,
+        ),
+      ];
     }
 
     await new Verifier(options).verifyProvider();
