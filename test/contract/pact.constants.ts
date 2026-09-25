@@ -5,3 +5,5 @@ export const PACT_CONSUMER_VERSION =
 export const PACT_PROVIDER_VERSION =
   process.env.PACT_PROVIDER_VERSION ?? '1.0.0';
 export const PRODUCT_EXISTS_STATE = 'a product with id 1 exists';
+export const PRODUCT_AVAILABLE_TO_ORDER_STATE =
+  'a product with id 1 is available to order';

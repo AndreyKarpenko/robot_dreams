@@ -48,6 +48,79 @@
         },
         "status": 200
       }
+    },
+    {
+      "description": "a request to create an order for product 1",
+      "providerStates": [
+        {
+          "name": "a product with id 1 is available to order"
+        }
+      ],
+      "request": {
+        "body": {
+          "items": [
+            {
+              "product_id": 1,
+              "quantity": 1
+            }
+          ]
+        },
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "method": "POST",
+        "path": "/orders"
+      },
+      "response": {
+        "body": {
+          "id": 1,
+          "items": [
+            {
+              "price_cents": 1299,
+              "product_id": 1,
+              "quantity": 1
+            }
+          ],
+          "status": "created",
+          "total_cents": 1299
+        },
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "matchingRules": {
+          "body": {
+            "$": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.items": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            }
+          },
+          "header": {
+            "Content-Type": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "application/json.*"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      }
     }
   ],
   "metadata": {
