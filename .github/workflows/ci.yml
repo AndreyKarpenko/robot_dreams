@@ -36,7 +36,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Start Pact Broker
-        run: docker compose up -d --wait
+        run: docker compose up -d --wait pact-broker
       - name: Generate contract
         run: npm run test:contract
       - name: Publish contract
