@@ -49,6 +49,20 @@ export class OrdersRepository {
     );
   }
 
+  async updateStatus(
+    id: string | number,
+    status: string,
+  ): Promise<OrderRow | null> {
+    const result = await this.db.query<OrderRow>(
+      `UPDATE orders
+          SET status = $2
+        WHERE id = $1
+        RETURNING id, status, total, buyer_id, created_at`,
+      [id, status],
+    );
+    return result.rows[0] ?? null;
+  }
+
   async findByIdWithItems(id: string | number): Promise<OrderWithItems | null> {
     const result = await this.db.query<{
       id: string;

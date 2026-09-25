@@ -392,6 +392,74 @@ curl -sS "http://127.0.0.1:9292/can-i-deploy?pacticipant=MarketplaceWeb&version=
 
 У CI job `contract` робить publish → verify (`publishVerificationResult: true`) → can-i-deploy. `PACT_BROKER_URL` / `PACT_BROKER_TOKEN` — GitHub secrets; локальний compose підставляється, якщо секрет порожній.
 
+## Realtime (hw-18)
+
+Зміна статусу замовлення публікує подію `order.status` з `OrdersService` (після `COMMIT`) в одну шину `OrderEventsService`. WebSocket-gateway кладе сокет у кімнату `orders:<id>` лише якщо замовлення належить `auth.userId`, і емітить подію тільки в цю кімнату. Той самий потік віддає `GET /orders/:id/events` (`text/event-stream`, поле `id:`, реплей за `Last-Event-ID`).
+
+Збірка як на лекції: `tsc` через `nest build`, далі `node dist`. `tsx` не емітить метадані декораторів, тож gateway з нього не підніметься. `npm run start` — це `npm run build && node dist/main.js`.
+
+```bash
+docker compose up -d --wait
+cp .env.example .env
+cp secrets/db_password.example secrets/db_password
+export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
+export SKIP_VAULT=1
+npm ci
+npm run build
+npm run migrate
+npm run seed
+docker compose exec -T db psql -U admin -d shop -v ON_ERROR_STOP=1 -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;"
+export DEFAULT_BUYER_ID="$(docker compose exec -T db psql -U admin -d shop -tAc "SELECT id FROM users WHERE email = 'buyer.daria@shop.test'")"
+npm run start
+```
+
+`DEFAULT_BUYER_ID` має бути в оточенні процесу API: `POST /orders` пише замовлення на цього покупця, а сокет проходить перевірку власника лише з тим самим id (`handshake.auth.userId`).
+
+Зміна статусу (кожен успішний виклик — нова подія, навіть якщо рядок статусу той самий). Дозволені значення: `created`, `paid`, `shipped`, `cancelled`.
+
+```bash
+ORDER_ID=$(curl -s -X POST http://localhost:3000/orders \
+  -H 'content-type: application/json' \
+  -d '{"items":[{"product_id":1,"quantity":1}]}' \
+  | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).id")
+
+curl -s -X PATCH "http://localhost:3000/orders/${ORDER_ID}/status" \
+  -H 'content-type: application/json' \
+  -d '{"status":"paid"}'
+
+curl -sN --max-time 2 -D - -o /dev/null \
+  "http://localhost:3000/orders/${ORDER_ID}/events" | grep -i '^content-type'
+
+for s in paid shipped cancelled created; do
+  curl -s -X PATCH "http://localhost:3000/orders/${ORDER_ID}/status" \
+    -H 'content-type: application/json' \
+    -d "{\"status\":\"$s\"}"
+done
+
+curl -sN --max-time 2 -H 'Last-Event-ID: 3' \
+  "http://localhost:3000/orders/${ORDER_ID}/events" | grep '^id:' | head -1
+```
+
+Ізоляція кімнат. Скрипт сам створює два замовлення, підключає клієнтів, чекає ack від `join` і лише потім міняє статус замовлення A. `--same-room` — той самий код, друга кімната теж A.
+
+```bash
+node scripts/realtime-demo.mjs; echo "exit=$?"
+node scripts/realtime-demo.mjs --same-room; echo "exit=$?"
+```
+
+Redis-адаптер для одного інстанса не потрібен, але на двох інстансах кімнати Socket.IO і буфер подій лишаються в памʼяті кожного процесу, тож клієнт на іншому інстансі не побачить `order.status` — це лікується Redis-адаптером Socket.IO і спільним pub/sub для шини (лекція, крок 7).
+
+## Trade-offs: WebSocket vs SSE
+
+Для нотифікацій про статус замовлення в проді я лишив би SSE. Покупець лише слухає: потік сервер → клієнт лягає на звичайний HTTP, а `Last-Event-ID` повертає пропущені події після обриву. WebSocket лишив би там, де той самий екран ще й шле команди (join кімнати) одним зʼєднанням — для чистих нотифікацій upgrade і sticky sessions зайві.
+
+| Критерій | WebSocket | SSE |
+| --- | --- | --- |
+| Напрям каналу | двосторонній: клієнт шле `join`, сервер пушить `order.status` | лише сервер → клієнт; команди лишаються звичайним HTTP |
+| Реконект / відновлення | socket.io піднімає сокет сам (події реконекту — на manager), пропущені статуси без окремого буфера не доїжджають | браузер шле `Last-Event-ID`, сервер віддає події з `id` > N з памʼяті; `retry:` задає паузу |
+| Вимоги до інфраструктури | HTTP Upgrade, sticky sessions або Redis-адаптер, інакше кімнати не спільні між інстансами | звичайний довгий GET, проксі без окремої підтримки сокетів |
+| Ціна на подію | постійний сокет і heartbeat навіть коли статусів немає | одне HTTP-зʼєднання, подія — кілька текстових рядків `id` / `event` / `data` |
+
 ## Deployment
 
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
