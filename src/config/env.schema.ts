@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-  DB_URL: z.url({ protocol: /^postgres$/ }),
+  DB_URL: z.url({ protocol: /^postgres(ql)?$/ }),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
 });
