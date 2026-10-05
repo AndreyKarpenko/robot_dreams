@@ -1,4 +1,9 @@
 import type { DataSource } from 'typeorm';
+import { publishOrderPlaced } from './broker/publish-order-placed';
+import {
+  orderPlacedEventId,
+  type OrderPlacedEvent,
+} from './broker/order-placed';
 import {
   CheckoutError,
   InsufficientBalanceError,
@@ -96,7 +101,8 @@ export async function checkout(
     throw new CheckoutError('quantity must be an integer >= 1');
   }
 
-  return dataSource.transaction(async (manager) => {
+  let placed: OrderPlacedEvent | undefined;
+  const result = await dataSource.transaction(async (manager) => {
     const products = returningRows<ProductRow>(
       await manager.query(
         `UPDATE products
@@ -155,6 +161,24 @@ export async function checkout(
       ],
     );
 
+    placed = {
+      eventId: orderPlacedEventId(orderId),
+      type: 'order.placed',
+      occurredAt: new Date().toISOString(),
+      data: {
+        orderId,
+        buyerId: input.buyerId,
+        total,
+        items: [
+          {
+            productId: input.productId,
+            quantity: input.quantity,
+            unitPrice: Number(product.price),
+          },
+        ],
+      },
+    };
+
     return {
       orderId,
       total,
@@ -162,6 +186,11 @@ export async function checkout(
       balanceLeft: Number(buyers[0].balance),
     };
   });
+
+  if (placed) {
+    await publishOrderPlaced(placed);
+  }
+  return result;
 }
 
 export { CheckoutError } from './checkout-errors';
