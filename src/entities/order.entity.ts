@@ -31,6 +31,19 @@ export class Order {
   @Column({ type: 'int', default: 0 })
   total: number;
 
+  /**
+   * Last status-event id for this order. Owned by the status update, not by
+   * entity saves, so a restart cannot mint id 1 again.
+   */
+  @Column({
+    type: 'bigint',
+    name: 'event_seq',
+    default: 0,
+    insert: false,
+    update: false,
+  })
+  eventSeq: string;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;
 

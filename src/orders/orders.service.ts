@@ -2,17 +2,22 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../db/database.module';
 import { CreateOrderDto } from './dto/create-order.dto';
-import { OrdersRepository } from './orders.repository';
+import { OrderStatus } from './dto/update-order-status.dto';
+import { OrderEventsService } from './order-events.service';
+import { OrderRow, OrdersRepository } from './orders.repository';
 import { ProductsRepository } from '../products/products.repository';
+import { assertStreamTokenSecret, signStreamToken } from './stream-token';
 
 export type OrderResponse = {
   id: number;
   status: string;
+  buyer_id: number;
   items: Array<{
     product_id: number;
     quantity: number;
@@ -21,17 +26,27 @@ export type OrderResponse = {
   total_cents: number;
 };
 
+export type CreatedOrderResponse = OrderResponse & {
+  stream_token: string;
+};
+
 @Injectable()
 export class OrdersService {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly orders: OrdersRepository,
+    private readonly orderEvents: OrderEventsService,
   ) {}
 
-  async create(dto: CreateOrderDto): Promise<OrderResponse> {
-    const buyerId = process.env.DEFAULT_BUYER_ID;
+  async create(dto: CreateOrderDto): Promise<CreatedOrderResponse> {
+    const buyerId = process.env.DEFAULT_BUYER_ID?.trim();
     if (!buyerId) {
       throw new BadRequestException('buyer is not configured');
+    }
+    try {
+      assertStreamTokenSecret();
+    } catch {
+      throw new InternalServerErrorException('STREAM_TOKEN_SECRET is not set');
     }
 
     const merged = new Map<number, number>();
@@ -84,13 +99,16 @@ export class OrdersService {
       }
 
       await client.query('COMMIT');
-      return toOrderResponse(order, {
-        items: lines.map((line) => ({
-          product_id: line.productId,
-          quantity: line.quantity,
-          unit_price: line.unitPrice,
-        })),
-      });
+      return {
+        ...toOrderResponse(order, {
+          items: lines.map((line) => ({
+            product_id: line.productId,
+            quantity: line.quantity,
+            unit_price: line.unitPrice,
+          })),
+        }),
+        stream_token: signStreamToken(order.buyer_id),
+      };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -110,10 +128,43 @@ export class OrdersService {
     }
     return toOrderResponse(found.order, found);
   }
+
+  async updateStatus(id: number, status: OrderStatus): Promise<OrderResponse> {
+    const client = await this.pool.connect();
+    let updated: OrderRow;
+    let eventId: number;
+    try {
+      await client.query('BEGIN');
+      const orders = new OrdersRepository(client);
+      const appended = await orders.updateStatus(id, status);
+      if (!appended) {
+        throw new NotFoundException();
+      }
+      await client.query('COMMIT');
+      updated = appended.order;
+      eventId = appended.eventId;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    this.orderEvents.publish({
+      id: eventId,
+      orderId: Number(updated.id),
+      status: updated.status,
+    });
+    const found = await this.orders.findByIdWithItems(updated.id);
+    if (!found) {
+      throw new NotFoundException();
+    }
+    return toOrderResponse(found.order, found);
+  }
 }
 
 function toOrderResponse(
-  order: { id: string; status: string; total: number },
+  order: { id: string; status: string; total: number; buyer_id: string },
   found: {
     items: Array<{ product_id: string; quantity: number; unit_price: number }>;
   },
@@ -121,6 +172,7 @@ function toOrderResponse(
   return {
     id: Number(order.id),
     status: order.status,
+    buyer_id: Number(order.buyer_id),
     items: found.items.map((item) => ({
       product_id: Number(item.product_id),
       quantity: item.quantity,

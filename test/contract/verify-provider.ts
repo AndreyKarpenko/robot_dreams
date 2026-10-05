@@ -33,6 +33,7 @@ async function seedProductOne(pool: Pool): Promise<void> {
 export async function verifyProvider(): Promise<void> {
   const db: TestDb = await startTestDb();
   process.env.DEFAULT_BUYER_ID ??= '1';
+  process.env.STREAM_TOKEN_SECRET ??= 'test-stream-token-secret';
   let app: INestApplication | undefined;
   try {
     app = await createTestingApp();

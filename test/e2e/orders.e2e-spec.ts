@@ -36,6 +36,7 @@ describe('Orders (e2e)', () => {
     );
     productId = Number(product.id);
     process.env.DEFAULT_BUYER_ID = String(buyer.id);
+    process.env.STREAM_TOKEN_SECRET ??= 'test-stream-token-secret';
     app = await createTestingApp();
   }, 120000);
 

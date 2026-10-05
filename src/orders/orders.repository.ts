@@ -19,6 +19,16 @@ export type OrderWithItems = {
   items: OrderItemRow[];
 };
 
+export type StatusChange = {
+  order: OrderRow;
+  eventId: number;
+};
+
+export type StatusEventRow = {
+  id: number;
+  status: string;
+};
+
 export class OrdersRepository {
   constructor(private readonly db: Queryable) {}
 
@@ -47,6 +57,68 @@ export class OrdersRepository {
        VALUES ($1, $2, $3, $4)`,
       [input.quantity, input.unitPrice, input.orderId, input.productId],
     );
+  }
+
+  /**
+   * Status and the next event id commit together. `event_seq` is the
+   * monotonic id; the row in `order_status_events` is what SSE replays.
+   */
+  async updateStatus(
+    id: string | number,
+    status: string,
+  ): Promise<StatusChange | null> {
+    const result = await this.db.query<OrderRow & { event_seq: string }>(
+      `UPDATE orders
+          SET status = $2,
+              event_seq = event_seq + 1
+        WHERE id = $1
+        RETURNING id, status, total, buyer_id, created_at, event_seq`,
+      [id, status],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    const eventId = Number(row.event_seq);
+    if (!Number.isSafeInteger(eventId)) {
+      throw new Error(`event id for order ${String(id)} is not a safe integer`);
+    }
+    await this.db.query(
+      `INSERT INTO order_status_events (order_id, id, status)
+       VALUES ($1, $2, $3)`,
+      [row.id, eventId, row.status],
+    );
+    return {
+      order: {
+        id: row.id,
+        status: row.status,
+        total: row.total,
+        buyer_id: row.buyer_id,
+        created_at: row.created_at,
+      },
+      eventId,
+    };
+  }
+
+  async statusEventsSince(
+    orderId: number,
+    afterId: number,
+  ): Promise<StatusEventRow[]> {
+    const result = await this.db.query<{ id: string; status: string }>(
+      `SELECT id, status
+         FROM order_status_events
+        WHERE order_id = $1
+          AND id > $2
+        ORDER BY id`,
+      [orderId, afterId],
+    );
+    return result.rows.map((row) => {
+      const id = Number(row.id);
+      if (!Number.isSafeInteger(id)) {
+        throw new Error(`event id for order ${orderId} is not a safe integer`);
+      }
+      return { id, status: row.status };
+    });
   }
 
   async findByIdWithItems(id: string | number): Promise<OrderWithItems | null> {

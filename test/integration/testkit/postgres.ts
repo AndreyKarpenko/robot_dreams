@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { DataSource } from 'typeorm';
 import {
   InitialSchema1757520000000,
+  OrderStatusEvents1762300000000,
   StockBalanceAndJobs1760000000000,
 } from '../../../src/db/migrations';
 
@@ -21,7 +22,11 @@ export async function startTestDb(): Promise<TestDb> {
   const ds = new DataSource({
     type: 'postgres',
     url: uri,
-    migrations: [InitialSchema1757520000000, StockBalanceAndJobs1760000000000],
+    migrations: [
+      InitialSchema1757520000000,
+      StockBalanceAndJobs1760000000000,
+      OrderStatusEvents1762300000000,
+    ],
     synchronize: false,
     logging: false,
   });
