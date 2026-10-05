@@ -1,13 +1,12 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { Observable, Subject, Subscription } from 'rxjs';
+import { OrdersRepository } from './orders.repository';
 
 export type OrderStatusEvent = {
   id: number;
   orderId: number;
   status: string;
 };
-
-const BUFFER_LIMIT = 100;
 
 export function orderRoom(orderId: number): string {
   return `orders:${orderId}`;
@@ -16,40 +15,35 @@ export function orderRoom(orderId: number): string {
 @Injectable()
 export class OrderEventsService implements OnModuleDestroy {
   private readonly subject = new Subject<OrderStatusEvent>();
-  private readonly sequences = new Map<number, number>();
-  private readonly buffers = new Map<number, OrderStatusEvent[]>();
 
-  /** Live stream. WebSocket forwards this into rooms; SSE uses subscribeOrder. */
+  /** Live stream. WebSocket forwards this into rooms; SSE replays from the log, then this. */
   readonly events$: Observable<OrderStatusEvent> = this.subject.asObservable();
+
+  constructor(private readonly orders: OrdersRepository) {}
 
   onModuleDestroy(): void {
     this.subject.complete();
   }
 
-  publish(orderId: number, status: string): OrderStatusEvent {
-    const id = (this.sequences.get(orderId) ?? 0) + 1;
-    this.sequences.set(orderId, id);
-    const event: OrderStatusEvent = { id, orderId, status };
-    const buffer = this.buffers.get(orderId) ?? [];
-    buffer.push(event);
-    if (buffer.length > BUFFER_LIMIT) {
-      buffer.splice(0, buffer.length - BUFFER_LIMIT);
-    }
-    this.buffers.set(orderId, buffer);
+  /** Fan out an event whose id was already allocated in `orders.event_seq`. */
+  publish(event: OrderStatusEvent): void {
     this.subject.next(event);
-    return event;
   }
 
   /**
-   * Replay events with id > lastEventId, then keep streaming new ones.
-   * Subscribing before the replay closes the gap where a publish lands in between.
+   * Replay rows with id > lastEventId, then keep streaming new ones.
+   * Live events that land while the log is loading stay queued so a higher
+   * id cannot move the cursor past a row that has not been sent yet.
    */
-  subscribeOrder(
+  async subscribeOrder(
     orderId: number,
     lastEventId: number,
     onEvent: (event: OrderStatusEvent) => void,
-  ): () => void {
+  ): Promise<() => void> {
     let cursor = lastEventId;
+    const pending: OrderStatusEvent[] = [];
+    let replaying = true;
+
     const deliver = (event: OrderStatusEvent): void => {
       if (event.orderId !== orderId || event.id <= cursor) {
         return;
@@ -58,18 +52,31 @@ export class OrderEventsService implements OnModuleDestroy {
       onEvent(event);
     };
 
-    const subscription: Subscription = this.subject.subscribe(deliver);
-    for (const event of this.bufferedSince(orderId, lastEventId)) {
+    const subscription: Subscription = this.subject.subscribe((event) => {
+      if (event.orderId !== orderId) {
+        return;
+      }
+      if (replaying) {
+        pending.push(event);
+        return;
+      }
       deliver(event);
-    }
-    return () => subscription.unsubscribe();
-  }
+    });
 
-  private bufferedSince(
-    orderId: number,
-    lastEventId: number,
-  ): OrderStatusEvent[] {
-    const buffer = this.buffers.get(orderId) ?? [];
-    return buffer.filter((event) => event.id > lastEventId);
+    try {
+      const missed = await this.orders.statusEventsSince(orderId, lastEventId);
+      for (const row of missed) {
+        deliver({ id: row.id, orderId, status: row.status });
+      }
+      replaying = false;
+      for (const event of pending) {
+        deliver(event);
+      }
+    } catch (err) {
+      subscription.unsubscribe();
+      throw err;
+    }
+
+    return () => subscription.unsubscribe();
   }
 }

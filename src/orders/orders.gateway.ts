@@ -8,8 +8,10 @@ import {
 } from '@nestjs/websockets';
 import { Subscription } from 'rxjs';
 import type { Server, Socket } from 'socket.io';
+import { checkOrderOwner } from './order-access';
 import { OrderEventsService, orderRoom } from './order-events.service';
 import { OrdersRepository } from './orders.repository';
+import { verifyStreamToken } from './stream-token';
 
 type JoinResult = { ok: true; room: string } | { ok: false; error: string };
 
@@ -40,7 +42,7 @@ export class OrdersGateway implements OnGatewayInit, OnModuleDestroy {
     @ConnectedSocket() client: Socket,
     @MessageBody() body: unknown,
   ): Promise<JoinResult> {
-    const userId = readUserId(client);
+    const userId = verifyStreamToken(readHandshakeToken(client) ?? '');
     if (!userId) {
       return { ok: false, error: 'unauthorized' };
     }
@@ -50,12 +52,9 @@ export class OrdersGateway implements OnGatewayInit, OnModuleDestroy {
       return { ok: false, error: 'bad_order' };
     }
 
-    const found = await this.orders.findByIdWithItems(orderId);
-    if (!found) {
-      return { ok: false, error: 'not_found' };
-    }
-    if (String(found.order.buyer_id) !== userId) {
-      return { ok: false, error: 'forbidden' };
+    const access = await checkOrderOwner(this.orders, orderId, userId);
+    if (!access.ok) {
+      return access;
     }
 
     const room = orderRoom(orderId);
@@ -64,19 +63,16 @@ export class OrdersGateway implements OnGatewayInit, OnModuleDestroy {
   }
 }
 
-function readUserId(client: Socket): string | undefined {
+function readHandshakeToken(client: Socket): string | undefined {
   const auth: unknown = client.handshake.auth;
   if (auth == null || typeof auth !== 'object') {
     return undefined;
   }
-  const userId = (auth as { userId?: unknown }).userId;
-  if (typeof userId === 'number' && Number.isSafeInteger(userId)) {
-    return String(userId);
+  const token = (auth as { token?: unknown }).token;
+  if (typeof token !== 'string' || token.trim() === '') {
+    return undefined;
   }
-  if (typeof userId === 'string' && userId.trim() !== '') {
-    return userId.trim();
-  }
-  return undefined;
+  return token.trim();
 }
 
 function readOrderId(body: unknown): number | undefined {

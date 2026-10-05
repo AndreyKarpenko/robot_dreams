@@ -10,15 +10,17 @@ try {
   const productId = await firstProductId();
   const orderA = await createOrder(productId);
   const orderB = await createOrder(productId);
-  if (orderA.buyer_id == null || orderB.buyer_id == null) {
-    throw new Error('order response has no buyer_id');
+  if (!orderA.stream_token || !orderB.stream_token) {
+    throw new Error(
+      'order response has no stream_token. Set STREAM_TOKEN_SECRET before starting the API.',
+    );
   }
 
   const roomB = sameRoom ? orderA.id : orderB.id;
   const expectedB = sameRoom ? 1 : 0;
 
-  const socketA = await connect(orderA.buyer_id);
-  const socketB = await connect(orderB.buyer_id);
+  const socketA = await connect(orderA.stream_token);
+  const socketB = await connect(orderB.stream_token);
   socketARef.current = socketA;
   socketBRef.current = socketB;
 
@@ -83,12 +85,12 @@ async function createOrder(productId) {
   return res.json();
 }
 
-function connect(buyerId) {
+function connect(token) {
   const socket = io(baseUrl, {
     forceNew: true,
     reconnection: false,
     timeout: 5000,
-    auth: { userId: String(buyerId) },
+    auth: { token },
   });
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('connect timeout')), 5000);

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { Pool } from 'pg';
@@ -11,6 +12,7 @@ import { OrderStatus } from './dto/update-order-status.dto';
 import { OrderEventsService } from './order-events.service';
 import { OrderRow, OrdersRepository } from './orders.repository';
 import { ProductsRepository } from '../products/products.repository';
+import { assertStreamTokenSecret, signStreamToken } from './stream-token';
 
 export type OrderResponse = {
   id: number;
@@ -24,6 +26,10 @@ export type OrderResponse = {
   total_cents: number;
 };
 
+export type CreatedOrderResponse = OrderResponse & {
+  stream_token: string;
+};
+
 @Injectable()
 export class OrdersService {
   constructor(
@@ -32,10 +38,15 @@ export class OrdersService {
     private readonly orderEvents: OrderEventsService,
   ) {}
 
-  async create(dto: CreateOrderDto): Promise<OrderResponse> {
-    const buyerId = process.env.DEFAULT_BUYER_ID;
+  async create(dto: CreateOrderDto): Promise<CreatedOrderResponse> {
+    const buyerId = process.env.DEFAULT_BUYER_ID?.trim();
     if (!buyerId) {
       throw new BadRequestException('buyer is not configured');
+    }
+    try {
+      assertStreamTokenSecret();
+    } catch {
+      throw new InternalServerErrorException('STREAM_TOKEN_SECRET is not set');
     }
 
     const merged = new Map<number, number>();
@@ -88,13 +99,16 @@ export class OrdersService {
       }
 
       await client.query('COMMIT');
-      return toOrderResponse(order, {
-        items: lines.map((line) => ({
-          product_id: line.productId,
-          quantity: line.quantity,
-          unit_price: line.unitPrice,
-        })),
-      });
+      return {
+        ...toOrderResponse(order, {
+          items: lines.map((line) => ({
+            product_id: line.productId,
+            quantity: line.quantity,
+            unit_price: line.unitPrice,
+          })),
+        }),
+        stream_token: signStreamToken(order.buyer_id),
+      };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -118,15 +132,17 @@ export class OrdersService {
   async updateStatus(id: number, status: OrderStatus): Promise<OrderResponse> {
     const client = await this.pool.connect();
     let updated: OrderRow;
+    let eventId: number;
     try {
       await client.query('BEGIN');
       const orders = new OrdersRepository(client);
-      const row = await orders.updateStatus(id, status);
-      if (!row) {
+      const appended = await orders.updateStatus(id, status);
+      if (!appended) {
         throw new NotFoundException();
       }
       await client.query('COMMIT');
-      updated = row;
+      updated = appended.order;
+      eventId = appended.eventId;
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -134,7 +150,11 @@ export class OrdersService {
       client.release();
     }
 
-    this.orderEvents.publish(Number(updated.id), updated.status);
+    this.orderEvents.publish({
+      id: eventId,
+      orderId: Number(updated.id),
+      status: updated.status,
+    });
     const found = await this.orders.findByIdWithItems(updated.id);
     if (!found) {
       throw new NotFoundException();
