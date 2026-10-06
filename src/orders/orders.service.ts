@@ -12,6 +12,11 @@ import { OrderStatus } from './dto/update-order-status.dto';
 import { OrderEventsService } from './order-events.service';
 import { OrderRow, OrdersRepository } from './orders.repository';
 import { ProductsRepository } from '../products/products.repository';
+import {
+  orderPlacedEventId,
+  type OrderPlacedEvent,
+} from '../broker/order-placed';
+import { publishOrderPlaced } from '../broker/publish-order-placed';
 import { assertStreamTokenSecret, signStreamToken } from './stream-token';
 
 export type OrderResponse = {
@@ -58,6 +63,8 @@ export class OrdersService {
     }
 
     const client = await this.pool.connect();
+    let created: CreatedOrderResponse;
+    let placed: OrderPlacedEvent;
     try {
       await client.query('BEGIN');
       const products = new ProductsRepository(client);
@@ -99,7 +106,7 @@ export class OrdersService {
       }
 
       await client.query('COMMIT');
-      return {
+      created = {
         ...toOrderResponse(order, {
           items: lines.map((line) => ({
             product_id: line.productId,
@@ -109,12 +116,30 @@ export class OrdersService {
         }),
         stream_token: signStreamToken(order.buyer_id),
       };
+      placed = {
+        eventId: orderPlacedEventId(order.id),
+        type: 'order.placed',
+        occurredAt: new Date().toISOString(),
+        data: {
+          orderId: order.id,
+          buyerId,
+          total,
+          items: lines.map((line) => ({
+            productId: line.productId,
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+          })),
+        },
+      };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
     } finally {
       client.release();
     }
+
+    await publishOrderPlaced(placed);
+    return created;
   }
 
   findAll(): { items: OrderResponse[]; next_cursor: null } {

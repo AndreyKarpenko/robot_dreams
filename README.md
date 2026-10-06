@@ -195,6 +195,17 @@ bash scripts/with-secrets.sh dev bash scripts/restore-drill.sh  # scratch Postgr
 
 ```bash
 docker compose up -d --wait
+export BROKER_URL=amqp://app:app@127.0.0.1:5672
+export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
+export SKIP_VAULT=1
+npm ci
+npm run demo:publish
+npm run demo:dlq
+npm run demo:duplicate
+```
+
+```bash
+docker compose up -d --wait
 export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
 export SKIP_VAULT=1    # у грейдера немає доступу до сховища
 npm ci
@@ -227,6 +238,7 @@ Zod validates env on boot (`src/config/env.schema.ts` → `ConfigModule.forRoot(
 |---|---|---|---|---|
 | `PORT` | no | `3000` | env | HTTP port |
 | `DB_URL` | yes | — | **secrets store** (hw-11): password from `secrets/db_password`, URL from the untracked `.env` in both `dev` and `prod` | `postgres://user@host:port/db` — points at the hw-12 database (`shop`); the password inside the URL is ignored |
+| `BROKER_URL` | no | — | **secrets store** (hw-11), next to the database URL. Empty means the API boots without publishing | `amqp://user:pass@host:5672` — AMQP port of the hw-19 RabbitMQ. `15672` is the management UI, not AMQP |
 | `LOG_LEVEL` | no | `info` | env | `debug` \| `info` \| `warn` \| `error` |
 | `TIMEOUT_MS` | no | `5000` | env | outbound timeout, ms |
 
@@ -457,6 +469,42 @@ node scripts/realtime-demo.mjs --same-room; echo "exit=$?"
 ```
 
 Redis-адаптер для одного інстанса не потрібен. Номери подій і реплей SSE спільні для інстансів, бо живуть у Postgres. Кімнати Socket.IO і жива шина лишаються в памʼяті кожного процесу, тож WebSocket-клієнт на іншому інстансі не побачить `order.status` — це лікується Redis-адаптером Socket.IO і спільним pub/sub для шини (лекція, крок 7).
+
+## Async-події через RabbitMQ
+
+Брокер — RabbitMQ **4.2** (гілка LTS, комерційна підтримка до 30.06.2030). Образ `rabbitmq:4.2-management`: AMQP на `5672`, вебморда на `15672`. Черги — quorum (`x-queue-type: quorum`). Класичне дзеркалювання (`ha-mode`) у 4.0 прибрали.
+
+Топологію оголошує споживач і бутстрап `BrokerBootstrap`, не продюсер. Topic-exchange `shop.events`, черга `shop.orders.placed`, binding на routing key `order.placed`. Поруч — direct exchange `shop.events.dlx` і черга `shop.orders.placed.dlq`; на робочій черзі аргумент `x-dead-letter-exchange`. Продюсер цього не бачить: він публікує в exchange і не знає, хто слухає.
+
+Чергу поза демо читає API: `BrokerModule` після оголошення топології тримає споживача, поки живий процес. Той самий споживач окремим процесом — `npm run consume:order-placed`. Обидва пишуть у `order_placed_effects` через `ON CONFLICT`, тож друга репліка не подвоює ефект. Споживач API ходить у базу пулом застосунку. Міграція дає `app_user` права `SELECT`, `INSERT`, `UPDATE`, `DELETE` на `order_placed_effects` і `order_placed_deliveries`.
+
+Аргументи черги незмінні. Демо знімає DLQ і exchange перед повторним оголошенням, інакше зміна DLX дає `406 PRECONDITION_FAILED`. Робочу чергу `shop.orders.placed` воно не видаляє: на ній сидить споживач живого API, і `queue.delete` скасував би його разом із повідомленнями. Демо і живий споживач ділять цю чергу, тож числа нижче зняті, коли API і `consume:order-placed` зупинені.
+
+Подія `order.placed` виходить із оформлення замовлення після `COMMIT`: з `checkout` і з `POST /orders`. Тіло — контракт `{ eventId, type, occurredAt, data }`, не ORM-сутність. `eventId` стабільний: `order.placed:<orderId>`. Публікація йде одним confirm-каналом на процес (`createConfirmChannel` + `waitForConfirms`; канал не закривається після події) і з `mandatory: true`. Позитивний confirm без binding означає лише «брокер коректно викинув повідомлення», тому `basic.return` валить виклик. Якщо `BROKER_URL` не заданий, публікація не відбувається і споживач не стартує: API піднімається без брокера.
+
+Споживач працює з `noAck: false` і викликає `ack` після ефекту. Отруєне тіло (`poison: true` у демо DLQ) іде в `channel.reject(message, false)`, не в `nack`. На RabbitMQ 4.3 `nack(requeue=true)` не збільшує delivery-count, тож такий цикл нічим не обмежений. `reject` без requeue дає причину `rejected`. Її демо читає з `x-first-death-reason` (запасний шлях — перший запис `x-death`).
+
+Ефект ідемпотентний сам по собі: `INSERT INTO order_placed_effects (event_id, order_id) … ON CONFLICT (event_id) DO NOTHING`. Ідемпотентність тут — властивість операції. `eventId` — природний ключ цієї операції, а не окремий ключ ідемпотентності, яким обгортають неідемпотентний `qty = qty - 1`. Рядок лежить у Postgres, тож переживає рестарт процесу і спільний для двох реплік. Таблиця `order_placed_deliveries` лише рахує доставки; вона не є позначкою «вже оброблено» і не блокує ефект.
+
+`demo:duplicate` піднімає споживача окремим процесом. Той записує ефект і одразу робить `process.kill(process.pid, 'SIGKILL')` — до `ack`. `channel.close()` для цього не годиться: це коректне завершення. Тут процес зникає, ОС закриває сокет, брокер бачить обрив і повертає непідтверджене повідомлення. Другий споживач отримує той самий `eventId`, `INSERT` нічого не змінює, і лише тоді шле `ack`.
+
+Щілину між окремою позначкою «оброблено» і ефектом це ДЗ не закриває: якби це були два записи, падіння між ними лишило б ключ без ефекту, а повтор уже нічого б не зробив. Спільний `COMMIT` позначки й ефекту — це ДЗ #22. Тут ефект і є той `INSERT`. Публікація стоїть після коміту бази: спільного коміту з брокером немає, це закриє transactional outbox у тому ж ДЗ #22.
+
+`dead-letter-strategy: at-least-once` без `overflow: reject-publish` мовчки не вмикається. Політика приймається і видна в `effective_policy_definition`, а брокер лишається на at-most-once і пише про це лише в лог. Для цього ДЗ лишив дефолт.
+
+prefetch=10, бо ефект — один INSERT, і на прогоні `demo:publish` пʼять таких INSERT зайняли 4 мс сумарно: 10 × 1 мс менше за `consumer_timeout` у 30 хвилин; дефолт брокера 0 означає без ліміту, і перший споживач забрав би всю чергу.
+
+Це at-least-once доставка, не exactly-once. Confirm і ручний ack не дають третього варіанта: підтвердив рано — повідомлення зникне разом із процесом, підтвердив пізно — брокер пришле його ще раз. Exactly-once на рівні доставки немає ні в RabbitMQ, ні в будь-кого іншого. Результат один, бо повторна доставка того самого `eventId` впирається в `ON CONFLICT DO NOTHING` і ефект не подвоюється. `demo:duplicate` це показує: дві доставки, один ефект.
+
+Прогін на локальному стенді (exit 0):
+
+| Демо | Вивід |
+|---|---|
+| `demo:publish` | `published=5` `delivered=5` `effect=5` `acked=5` `dlq=0` `prefetch=10` (`effect_ms=4`) |
+| `demo:dlq` | `rejected=1` `work=0` `dlq=1` `dlq-reason=rejected` `effect=0` |
+| `demo:duplicate` | `deliveries=2` `effect=1` `skipped=1` |
+
+`BROKER_URL` лежить у сховищі ДЗ #11 поруч із підключенням до бази. Нового env-файла немає. Грейдер ставить `SKIP_VAULT=1` і бере `amqp://app:app@127.0.0.1:5672` з `docker-compose.yml`.
 
 ## Trade-offs: WebSocket vs SSE
 
