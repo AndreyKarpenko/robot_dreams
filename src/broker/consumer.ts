@@ -23,14 +23,25 @@ export function startOrderPlacedConsumer(options: {
   store: EffectStore;
   crashBeforeAck?: boolean;
   stopAfter?: number;
-}): { subscribed: Promise<void>; done: Promise<ConsumerStats> } {
+}): {
+  subscribed: Promise<void>;
+  done: Promise<ConsumerStats>;
+  stop: () => Promise<void>;
+} {
   let markSubscribed: () => void = () => {};
   const subscribed = new Promise<void>((resolve) => {
     markSubscribed = resolve;
   });
 
-  const done = consume(options, markSubscribed);
-  return { subscribed, done };
+  let stop = (): Promise<void> => Promise.resolve();
+  const done = consume(options, markSubscribed, (fn) => {
+    stop = fn;
+  });
+  return {
+    subscribed,
+    done,
+    stop: () => stop(),
+  };
 }
 
 async function consume(
@@ -40,6 +51,7 @@ async function consume(
     stopAfter?: number;
   },
   markSubscribed: () => void,
+  bindStop: (stop: () => Promise<void>) => void,
 ): Promise<ConsumerStats> {
   const connection = await getBrokerConnection();
   const channel = await connection.createChannel();
@@ -74,6 +86,15 @@ async function consume(
       settled = true;
       reject(err instanceof Error ? err : new Error(String(err)));
     };
+
+    bindStop(async () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      await channel.close().catch(() => undefined);
+      resolve(stats);
+    });
 
     const maybeFinish = () => {
       if (

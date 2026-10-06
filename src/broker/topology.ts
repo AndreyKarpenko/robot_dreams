@@ -19,7 +19,8 @@ export const PREFETCH = 10;
 
 /**
  * Consumer/bootstrap only. A producer that declared this would be naming its listeners.
- * Queue arguments are immutable; demos delete the queues before declaring them again.
+ * Queue arguments are immutable. The work queue is never deleted: the API consumer
+ * is subscribed to it, and queue.delete would cancel that consumer and drop its messages.
  */
 export async function declareTopology(connection: ChannelModel): Promise<void> {
   const channel = await connection.createChannel();
@@ -57,9 +58,11 @@ export async function declareTopology(connection: ChannelModel): Promise<void> {
   }
 }
 
-/** Drop queues and exchanges so a changed x-argument cannot 406, then declare. */
+/**
+ * Demo reset. Drops the DLQ and the exchanges so a changed x-argument cannot 406,
+ * then declares again. Does not delete WORK_QUEUE: that is the live API queue.
+ */
 export async function resetTopology(connection: ChannelModel): Promise<void> {
-  await deleteQuiet(connection, (channel) => channel.deleteQueue(WORK_QUEUE));
   await deleteQuiet(connection, (channel) =>
     channel.deleteQueue(DEAD_LETTER_QUEUE),
   );

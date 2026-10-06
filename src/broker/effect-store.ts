@@ -11,12 +11,23 @@ export type EffectCounts = {
  * forget the row on restart and would not exist on another replica.
  */
 export class EffectStore {
-  private constructor(private readonly pool: Pool) {}
+  private constructor(
+    private readonly pool: Pool,
+    private readonly ownsPool: boolean,
+  ) {}
 
   static async open(): Promise<EffectStore> {
-    const store = new EffectStore(new Pool({ ...dbConfig(), max: 4 }));
+    const store = new EffectStore(new Pool({ ...dbConfig(), max: 4 }), true);
     await store.ensureSchema();
     return store;
+  }
+
+  /**
+   * API process. The pool is the application's; migrations own the tables.
+   * close() must not end that pool.
+   */
+  static attach(pool: Pool): EffectStore {
+    return new EffectStore(pool, false);
   }
 
   async reset(): Promise<void> {
@@ -61,7 +72,9 @@ export class EffectStore {
   }
 
   async close(): Promise<void> {
-    await this.pool.end();
+    if (this.ownsPool) {
+      await this.pool.end();
+    }
   }
 
   private async ensureSchema(): Promise<void> {

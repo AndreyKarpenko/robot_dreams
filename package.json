@@ -27,6 +27,7 @@
     "demo:publish": "bash scripts/with-secrets.sh dev bash -c 'npm run build && node dist/demo-publish.js'",
     "demo:dlq": "bash scripts/with-secrets.sh dev bash -c 'npm run build && node dist/demo-dlq.js'",
     "demo:duplicate": "bash scripts/with-secrets.sh dev bash -c 'npm run build && node dist/demo-duplicate.js'",
+    "consume:order-placed": "bash scripts/with-secrets.sh dev bash -c 'npm run build && node dist/consume-order-placed.js'",
     "report": "bash scripts/with-secrets.sh dev node dist/report.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
