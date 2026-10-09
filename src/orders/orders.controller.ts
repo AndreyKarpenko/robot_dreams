@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -30,8 +31,14 @@ export class OrdersController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  create(@Body() createOrderDto: CreateOrderDto) {
-    return this.ordersService.create(createOrderDto);
+  create(
+    @Body() createOrderDto: CreateOrderDto,
+    @Headers('idempotency-key') idempotencyKey?: string | string[],
+  ) {
+    const key = Array.isArray(idempotencyKey)
+      ? idempotencyKey[0]
+      : idempotencyKey;
+    return this.ordersService.create(createOrderDto, key);
   }
 
   @Get()
