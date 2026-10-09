@@ -8,3 +8,6 @@ export class CheckoutError extends Error {
 export class InsufficientStockError extends CheckoutError {}
 
 export class InsufficientBalanceError extends CheckoutError {}
+
+/** Business write died after the outbox INSERT and before COMMIT. */
+export class BusinessWriteCrashedError extends CheckoutError {}

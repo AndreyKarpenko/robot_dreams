@@ -1,19 +1,32 @@
 import type { DataSource } from 'typeorm';
-import { publishOrderPlaced } from './broker/publish-order-placed';
+import { toOrderPlacedEvent } from './broker/order-placed';
 import {
-  orderPlacedEventId,
-  type OrderPlacedEvent,
-} from './broker/order-placed';
-import {
+  BusinessWriteCrashedError,
   CheckoutError,
   InsufficientBalanceError,
   InsufficientStockError,
 } from './checkout-errors';
+import {
+  findIdempotentOrderId,
+  insertOrderOutbox,
+  saveIdempotencyKey,
+} from './outbox/idempotency';
+import { isUniqueViolation, rowsFrom, type SqlQuery } from './outbox/rows';
 
 export type CheckoutInput = {
   buyerId: string;
   productId: string;
   quantity: number;
+  /**
+   * Caller's intent, not a hash of the body. The same key returns the same
+   * order; a second identical order needs its own key.
+   */
+  idempotencyKey?: string;
+};
+
+export type CheckoutOptions = {
+  /** Throw after the outbox INSERT so the business row and the event roll back together. */
+  crashAfterOutbox?: boolean;
 };
 
 export type CheckoutResult = {
@@ -21,6 +34,7 @@ export type CheckoutResult = {
   total: number;
   stockLeft: number;
   balanceLeft: number;
+  replayed: boolean;
 };
 
 type ProductRow = { id: string; stock: number; price: number };
@@ -87,22 +101,55 @@ function returningRows<T>(raw: unknown): T[] {
 
 /**
  * Place an order in one transaction: atomic stock decrement, atomic balance
- * debit, INSERT order + line, INSERT post-processing job.
+ * debit, INSERT order + line, INSERT post-processing job, INSERT outbox row.
  *
- * Oversell guard is `UPDATE … SET stock = stock - n WHERE stock >= n RETURNING`
- * (not a JS read-modify-write). Zero rows ⇒ not enough stock; the whole
- * transaction rolls back, so no orphan orders.
+ * The broker is not called here. A relay publishes the outbox row after
+ * COMMIT. Oversell guard is `UPDATE … SET stock = stock - n WHERE stock >= n
+ * RETURNING` (not a JS read-modify-write). Zero rows ⇒ not enough stock; the
+ * whole transaction rolls back, so no orphan orders and no orphan events.
  */
 export async function checkout(
   dataSource: DataSource,
   input: CheckoutInput,
+  options: CheckoutOptions = {},
+  attempt = 0,
 ): Promise<CheckoutResult> {
   if (!Number.isInteger(input.quantity) || input.quantity < 1) {
     throw new CheckoutError('quantity must be an integer >= 1');
   }
 
-  let placed: OrderPlacedEvent | undefined;
-  const result = await dataSource.transaction(async (manager) => {
+  try {
+    return await placeOrder(dataSource, input, options);
+  } catch (err) {
+    if (
+      attempt === 0 &&
+      !options.crashAfterOutbox &&
+      input.idempotencyKey &&
+      isUniqueViolation(err)
+    ) {
+      return checkout(dataSource, input, options, attempt + 1);
+    }
+    throw err;
+  }
+}
+
+async function placeOrder(
+  dataSource: DataSource,
+  input: CheckoutInput,
+  options: CheckoutOptions,
+): Promise<CheckoutResult> {
+  return dataSource.transaction(async (manager) => {
+    const query: SqlQuery = (sql, params) => manager.query(sql, params);
+    if (input.idempotencyKey) {
+      const existingId = await findIdempotentOrderId(
+        query,
+        input.idempotencyKey,
+      );
+      if (existingId) {
+        return replayedOrder(query, existingId, input);
+      }
+    }
+
     const products = returningRows<ProductRow>(
       await manager.query(
         `UPDATE products
@@ -161,11 +208,9 @@ export async function checkout(
       ],
     );
 
-    placed = {
-      eventId: orderPlacedEventId(orderId),
-      type: 'order.placed',
-      occurredAt: new Date().toISOString(),
-      data: {
+    await insertOrderOutbox(
+      query,
+      toOrderPlacedEvent({
         orderId,
         buyerId: input.buyerId,
         total,
@@ -176,21 +221,51 @@ export async function checkout(
             unitPrice: Number(product.price),
           },
         ],
-      },
-    };
+      }),
+    );
+    if (options.crashAfterOutbox) {
+      throw new BusinessWriteCrashedError(
+        'business write failed after outbox insert',
+      );
+    }
+    if (input.idempotencyKey) {
+      await saveIdempotencyKey(query, input.idempotencyKey, orderId);
+    }
 
     return {
       orderId,
       total,
       stockLeft: Number(product.stock),
       balanceLeft: Number(buyers[0].balance),
+      replayed: false,
     };
   });
+}
 
-  if (placed) {
-    await publishOrderPlaced(placed);
+async function replayedOrder(
+  query: SqlQuery,
+  orderId: string,
+  input: CheckoutInput,
+): Promise<CheckoutResult> {
+  const orders = rowsFrom(
+    await query(`SELECT total FROM orders WHERE id = $1`, [orderId]),
+  );
+  if (orders.length === 0) {
+    throw new CheckoutError('idempotency key points at a missing order');
   }
-  return result;
+  const products = rowsFrom(
+    await query(`SELECT stock FROM products WHERE id = $1`, [input.productId]),
+  );
+  const buyers = rowsFrom(
+    await query(`SELECT balance FROM users WHERE id = $1`, [input.buyerId]),
+  );
+  return {
+    orderId,
+    total: Number(orders[0].total),
+    stockLeft: Number(products[0]?.stock ?? 0),
+    balanceLeft: Number(buyers[0]?.balance ?? 0),
+    replayed: true,
+  };
 }
 
 export { CheckoutError } from './checkout-errors';

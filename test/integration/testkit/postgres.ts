@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 import {
   InitialSchema1757520000000,
   OrderStatusEvents1762300000000,
+  OutboxAndInbox1762600000000,
   StockBalanceAndJobs1760000000000,
 } from '../../../src/db/migrations';
 
@@ -26,6 +27,7 @@ export async function startTestDb(): Promise<TestDb> {
       InitialSchema1757520000000,
       StockBalanceAndJobs1760000000000,
       OrderStatusEvents1762300000000,
+      OutboxAndInbox1762600000000,
     ],
     synchronize: false,
     logging: false,

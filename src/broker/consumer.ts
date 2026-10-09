@@ -131,9 +131,8 @@ async function consume(
         return;
       }
 
-      await options.store.recordDelivery(event.eventId);
       const started = Date.now();
-      const applied = await options.store.applyEffect(
+      const { applied } = await options.store.consumeOnce(
         event.eventId,
         event.data.orderId,
       );
