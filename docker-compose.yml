@@ -33,6 +33,46 @@ services:
       timeout: 2s
       retries: 15
 
+  # Cache may evict. Queue, sessions, and rate limits must not: maxmemory-policy
+  # is per process, so SELECT does not split these two.
+  redis-cache:
+    image: redis:8-alpine
+    ports:
+      - '16379:6379'
+    command:
+      - redis-server
+      - --maxmemory
+      - 32mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ''
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  redis-queue:
+    image: redis:8-alpine
+    ports:
+      - '16380:6379'
+    command:
+      - redis-server
+      - --maxmemory-policy
+      - noeviction
+      - --appendonly
+      - 'yes'
+      - --appendfsync
+      - everysec
+      - --save
+      - ''
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
   rabbitmq:
     image: rabbitmq:4.2-management
     ports:

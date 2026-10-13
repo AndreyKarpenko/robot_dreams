@@ -20,6 +20,27 @@ export type SellerProductStats = {
   price_sum: number;
 };
 
+/** Card joins the seller and aggregates sales. This is the read the cache wraps. */
+export type ProductCard = {
+  id: string;
+  name: string;
+  price: number;
+  stock: number;
+  sellerName: string;
+  unitsSold: number;
+  orderLines: number;
+};
+
+type ProductCardRow = {
+  id: string;
+  name: string;
+  price: number;
+  stock: number;
+  seller_name: string;
+  units_sold: number;
+  order_lines: number;
+};
+
 export class ProductsRepository {
   constructor(private readonly db: Queryable) {}
 
@@ -71,6 +92,35 @@ export class ProductsRepository {
       [limit],
     );
     return result.rows;
+  }
+
+  async findCard(id: string | number): Promise<ProductCard | null> {
+    const result = await this.db.query<ProductCardRow>(
+      `SELECT p.id,
+              p.name,
+              p.price,
+              p.stock,
+              u.name AS seller_name,
+              COALESCE(SUM(oi.quantity), 0)::int AS units_sold,
+              COUNT(oi.id)::int AS order_lines
+         FROM products p
+         JOIN users u ON u.id = p.seller_id
+         LEFT JOIN order_items oi ON oi.product_id = p.id
+        WHERE p.id = $1
+        GROUP BY p.id, p.name, p.price, p.stock, u.name`,
+      [id],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      id: String(row.id),
+      name: row.name,
+      price: Number(row.price),
+      stock: Number(row.stock),
+      sellerName: row.seller_name,
+      unitsSold: Number(row.units_sold),
+      orderLines: Number(row.order_lines),
+    };
   }
 
   async statsBySeller(
