@@ -12,11 +12,14 @@ import { OrderStatus } from './dto/update-order-status.dto';
 import { OrderEventsService } from './order-events.service';
 import { OrderRow, OrdersRepository } from './orders.repository';
 import { ProductsRepository } from '../products/products.repository';
+import { toOrderPlacedEvent } from '../broker/order-placed';
 import {
-  orderPlacedEventId,
-  type OrderPlacedEvent,
-} from '../broker/order-placed';
-import { publishOrderPlaced } from '../broker/publish-order-placed';
+  findIdempotentOrderId,
+  insertOrderOutbox,
+  normalizeIdempotencyKey,
+  saveIdempotencyKey,
+} from '../outbox/idempotency';
+import { isUniqueViolation, type SqlQuery } from '../outbox/rows';
 import { assertStreamTokenSecret, signStreamToken } from './stream-token';
 
 export type OrderResponse = {
@@ -43,7 +46,25 @@ export class OrdersService {
     private readonly orderEvents: OrderEventsService,
   ) {}
 
-  async create(dto: CreateOrderDto): Promise<CreatedOrderResponse> {
+  async create(
+    dto: CreateOrderDto,
+    idempotencyKey?: string,
+  ): Promise<CreatedOrderResponse> {
+    const key = normalizeIdempotencyKey(idempotencyKey);
+    try {
+      return await this.createOnce(dto, key);
+    } catch (err) {
+      if (key && isUniqueViolation(err)) {
+        return this.createOnce(dto, key);
+      }
+      throw err;
+    }
+  }
+
+  private async createOnce(
+    dto: CreateOrderDto,
+    idempotencyKey: string | undefined,
+  ): Promise<CreatedOrderResponse> {
     const buyerId = process.env.DEFAULT_BUYER_ID?.trim();
     if (!buyerId) {
       throw new BadRequestException('buyer is not configured');
@@ -63,12 +84,26 @@ export class OrdersService {
     }
 
     const client = await this.pool.connect();
-    let created: CreatedOrderResponse;
-    let placed: OrderPlacedEvent;
     try {
       await client.query('BEGIN');
+      const query: SqlQuery = (sql, params) => client.query(sql, params);
       const products = new ProductsRepository(client);
       const orders = new OrdersRepository(client);
+
+      if (idempotencyKey) {
+        const existingId = await findIdempotentOrderId(query, idempotencyKey);
+        if (existingId) {
+          const found = await orders.findByIdWithItems(existingId);
+          if (!found) {
+            throw new NotFoundException();
+          }
+          await client.query('COMMIT');
+          return {
+            ...toOrderResponse(found.order, found),
+            stream_token: signStreamToken(found.order.buyer_id),
+          };
+        }
+      }
 
       const lines: Array<{
         productId: string;
@@ -105,8 +140,25 @@ export class OrdersService {
         });
       }
 
+      await insertOrderOutbox(
+        query,
+        toOrderPlacedEvent({
+          orderId: order.id,
+          buyerId,
+          total,
+          items: lines.map((line) => ({
+            productId: line.productId,
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+          })),
+        }),
+      );
+      if (idempotencyKey) {
+        await saveIdempotencyKey(query, idempotencyKey, order.id);
+      }
+
       await client.query('COMMIT');
-      created = {
+      return {
         ...toOrderResponse(order, {
           items: lines.map((line) => ({
             product_id: line.productId,
@@ -116,30 +168,12 @@ export class OrdersService {
         }),
         stream_token: signStreamToken(order.buyer_id),
       };
-      placed = {
-        eventId: orderPlacedEventId(order.id),
-        type: 'order.placed',
-        occurredAt: new Date().toISOString(),
-        data: {
-          orderId: order.id,
-          buyerId,
-          total,
-          items: lines.map((line) => ({
-            productId: line.productId,
-            quantity: line.quantity,
-            unitPrice: line.unitPrice,
-          })),
-        },
-      };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
     } finally {
       client.release();
     }
-
-    await publishOrderPlaced(placed);
-    return created;
   }
 
   findAll(): { items: OrderResponse[]; next_cursor: null } {

@@ -199,6 +199,19 @@ export BROKER_URL=amqp://app:app@127.0.0.1:5672
 export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
 export SKIP_VAULT=1
 npm ci
+npm run build
+npm run migrate
+npm run demo:outbox
+npm run demo:crash-write
+npm run demo:crash-relay
+```
+
+```bash
+docker compose up -d --wait
+export BROKER_URL=amqp://app:app@127.0.0.1:5672
+export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
+export SKIP_VAULT=1
+npm ci
 npm run demo:publish
 npm run demo:dlq
 npm run demo:duplicate
@@ -488,7 +501,7 @@ Redis-адаптер для одного інстанса не потрібен.
 
 `demo:duplicate` піднімає споживача окремим процесом. Той записує ефект і одразу робить `process.kill(process.pid, 'SIGKILL')` — до `ack`. `channel.close()` для цього не годиться: це коректне завершення. Тут процес зникає, ОС закриває сокет, брокер бачить обрив і повертає непідтверджене повідомлення. Другий споживач отримує той самий `eventId`, `INSERT` нічого не змінює, і лише тоді шле `ack`.
 
-Щілину між окремою позначкою «оброблено» і ефектом це ДЗ не закриває: якби це були два записи, падіння між ними лишило б ключ без ефекту, а повтор уже нічого б не зробив. Спільний `COMMIT` позначки й ефекту — це ДЗ #22. Тут ефект і є той `INSERT`. Публікація стоїть після коміту бази: спільного коміту з брокером немає, це закриє transactional outbox у тому ж ДЗ #22.
+Позначка в `processed_messages` і ефект у `order_placed_effects` комітяться однією транзакцією. Публікація `order.placed` для оформлення замовлення пишеться в outbox у тій самій транзакції, що й саме замовлення; relay виносить рядок у RabbitMQ вже після `COMMIT`. Деталі й числа прогонів — у секції «Outbox та ідемпотентність».
 
 `dead-letter-strategy: at-least-once` без `overflow: reject-publish` мовчки не вмикається. Політика приймається і видна в `effective_policy_definition`, а брокер лишається на at-most-once і пише про це лише в лог. Для цього ДЗ лишив дефолт.
 
@@ -505,6 +518,30 @@ prefetch=10, бо ефект — один INSERT, і на прогоні `demo:p
 | `demo:duplicate` | `deliveries=2` `effect=1` `skipped=1` |
 
 `BROKER_URL` лежить у сховищі ДЗ #11 поруч із підключенням до бази. Нового env-файла немає. Грейдер ставить `SKIP_VAULT=1` і бере `amqp://app:app@127.0.0.1:5672` з `docker-compose.yml`.
+
+## Outbox та ідемпотентність
+
+Оформлення замовлення (`checkout` і `POST /orders`) пише бізнес-рядок і рядок `outbox` в одному `dataSource.transaction` / `pool.connect()`. У транзакції немає `publish`: брокер не вміє відкочуватись. У `payload` лежить контракт `toOrderPlacedEvent`, а не ORM-сутність. Relay забирає рядки `SELECT … WHERE published_at IS NULL ORDER BY created_at, id FOR UPDATE SKIP LOCKED`, публікує в RabbitMQ і лише потім робить `UPDATE published_at`. API, коли заданий `BROKER_URL`, крутить той самий цикл кожні 500 мс.
+
+Імена колонок — snake_case (`aggregate_type`, `aggregate_id`, `published_at`). Канон Debezium Outbox Event Router — без підкреслень, і `route.by.field` за замовчуванням читає `aggregatetype`. Перехід на CDC лишає консюмерів: у конфігурації роутера треба виставити `route.by.field=aggregate_type` і `table.field.event.key=aggregate_id`.
+
+Ідемпотентність у три шари. На краю API заголовок `Idempotency-Key` зберігається як намір (`idempotency_keys.key → order_id`), без хеша тіла: два легітимні однакові замовлення — це два ключі. У консюмера ефект — `INSERT … ON CONFLICT (event_id) DO NOTHING`, а позначка `processed_messages (message_id, consumer)` комітиться разом із цим ефектом. `order_placed_deliveries` лише рахує доставки, включно з дублями.
+
+`ORDER BY created_at, id` задає лише порядок вибірки. `SKIP LOCKED` роздає рядки різним воркерам, тож глобального порядку доставки немає. Окремого ключа партиціонування тут немає.
+
+Опубліковані рядки з часом треба прибирати, інакше таблиця розпухає і vacuum починає гальмувати навіть частковий індекс `WHERE published_at IS NULL` (у ньому лишаються лише невинесені рядки, але heap росте): `DELETE FROM outbox WHERE published_at < now() - interval '7 days'`.
+
+`demo:crash-relay` убиває relay винятком усередині тієї самої транзакції, рівно після `publish` і до `UPDATE published_at` (змодельований обрив, як крок 8 на лекції, не `kill -9`). TypeORM відкочує транзакцію, `published_at` лишається `NULL`, а повідомлення вже в черзі. Наступний прохід публікує його вдруге.
+
+Чому не можна поміняти місцями `publish` і `UPDATE published_at`. Якщо спершу позначити рядок винесеним, а потім публікувати, падіння між цими кроками залишає `published_at` заповненим і порожню чергу. Relay цей рядок більше не візьме. Дубль лікується `ON CONFLICT` на консюмері; втрачене повідомлення не лікується нічим. Помилка `publish` теж не доводить, що брокеру нічого не дісталось: могла загубитись лише відповідь. Тому відкат позначки після помилки публікації не прибирає подію, яка вже могла лягти в чергу, і дедуп на консюмері потрібен у будь-якому разі.
+
+Прогін на локальному стенді (усі три з exit 0):
+
+| Демо | Вивід |
+|---|---|
+| `demo:outbox` | `requests=2` `orders=1` `outbox=1` `published=1` `deliveries=1` `effect=1` `processed=1` |
+| `demo:crash-write` | `write-failed=1` `orders=0` `outbox=0` `published=0` `deliveries=0` `effect=0` |
+| `demo:crash-relay` | `published=2` `deliveries=2` `applied=1` `effect=1` `processed=1` |
 
 ## Trade-offs: WebSocket vs SSE
 

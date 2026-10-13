@@ -24,6 +24,34 @@ export function orderPlacedEventId(orderId: string): string {
   return `order.placed:${orderId}`;
 }
 
+/**
+ * Explicit event contract. Do not spread an Order entity into the payload:
+ * a renamed column would become a public API break.
+ */
+export function toOrderPlacedEvent(order: {
+  orderId: string;
+  buyerId: string;
+  total: number;
+  items: OrderPlacedEvent['data']['items'];
+  occurredAt?: string;
+}): OrderPlacedEvent {
+  return {
+    eventId: orderPlacedEventId(order.orderId),
+    type: 'order.placed',
+    occurredAt: order.occurredAt ?? new Date().toISOString(),
+    data: {
+      orderId: order.orderId,
+      buyerId: order.buyerId,
+      total: order.total,
+      items: order.items.map((item) => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+      })),
+    },
+  };
+}
+
 export function parseOrderPlaced(content: Buffer): OrderPlacedEvent | null {
   let value: unknown;
   try {

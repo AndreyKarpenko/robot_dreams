@@ -12,6 +12,7 @@ import { PG_POOL } from '../db/database.module';
 import { closeBroker, getBrokerConnection } from './connection';
 import { startOrderPlacedConsumer } from './consumer';
 import { EffectStore } from './effect-store';
+import { OutboxRelay } from '../outbox/relay.service';
 import { declareTopology } from './topology';
 
 /**
@@ -84,6 +85,6 @@ export class BrokerBootstrap implements OnModuleInit, OnModuleDestroy {
 }
 
 @Module({
-  providers: [BrokerBootstrap],
+  providers: [BrokerBootstrap, OutboxRelay],
 })
 export class BrokerModule {}
