@@ -8,6 +8,7 @@ import { BrokerModule } from './broker/broker.module';
 import { validate } from './config/env.schema';
 import { DatabaseModule } from './db/database.module';
 import { HealthController } from './health/health.controller';
+import { RedisModule } from './redis/redis.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { HealthController } from './health/health.controller';
       validate,
     }),
     DatabaseModule,
+    RedisModule,
     BrokerModule,
     ProductsModule,
     OrdersModule,
