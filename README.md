@@ -191,7 +191,119 @@ bash scripts/with-secrets.sh dev bash scripts/restore-drill.sh  # scratch Postgr
 
 Розклад нічного дампу — [`backup.cron`](backup.cron). Протокол drill-у (RTO/RPO) — [`RESTORE-DRILL.md`](RESTORE-DRILL.md). Міграції TypeORM лишайте на `:5432`: DDL через transaction pooling часто падає.
 
+## Redis: кеш, сесії, ліміти, черга
+
+Картка товару (`products` ⨝ продавець ⨝ сума `order_items`) читається через cache-aside. Промах іде в Postgres і пише ключ з TTL `300 + random(0..60)` секунд. Влучання Redis не чіпає базу. Запис у кеш обгорнутий: помилка Redis не валить HTTP-запит.
+
+Лавина на зниклий ключ бере `SET lock:… <token> NX PX`. Решта чекає і перечитує кеш. Лок знімає Lua compare-and-delete, не голий `DEL`.
+
+Сесії і лічильник ліміту лежать у **черговому** Redis (`REDIS_QUEUE_URL`, `noeviction`), не в кеші. `allkeys-lru` колись викине сесію або обнулить ліміт, і це не відтворити. Окремий третій контейнер був би теж правильним; черга, сесія і ліміт мають одну вимогу — ключ не можна витісняти — тому їм вистачає одного інстансу з AOF `everysec`.
+
+Ліміт — ковзне вікно одним Lua-скриптом. Сплеск на межі двох фіксованих вікон (до 2× ліміту за частку секунди) тут не пропускаємо. Два з’єднання ділять один ключ, тож ліміт не множиться на кількість подів. Перевищення — `429` і `Retry-After`.
+
+Черга BullMQ `hw23-ratings` перераховує картку поза HTTP: `attempts: 5`, `backoff: { type: 'exponential', delay: 200, jitter: 0.2 }`, `jobId` без `removeOnComplete: true`, планувальник через `upsertJobScheduler`.
+
+Два контейнери, бо `maxmemory-policy` одна на процес. Кеш: `maxmemory 32mb` + `allkeys-lru` (`redis-cache`, порт **16379**). Черга: `noeviction` + AOF (`redis-queue`, порт **16380**). `SELECT 1` політику не розводить.
+
+Прогін `SKIP_VAULT=1` (13 жовтня 2026):
+
+| Демо | Вивід |
+|---|---|
+| `demo:cache` | `cache-lru=1` `cache-maxmemory=1` `warmed=60` `ttl-distinct=38` `concurrent=24` `db-calls=1` `db-calls-warm=0` |
+| `demo:session` | `requests=3` `sessions=1` `in-redis=1` `ttl-renewed=1` |
+| `demo:ratelimit` | `instances=2` `limit=5` `requests=8` `allowed=5` `blocked=3` `status=429` `retry-after=1` |
+| `demo:queue` | `queue-noeviction=1` `attempts=3` `completed=1` `added=2` `queued=1` `schedulers=1` `scheduled-runs=3` |
+
+`ttl-distinct` плаває: попередній прогін дав 37. `db-calls` лишився 1.
+
+Якщо stampede-лок зламається — протухне, процес зупиниться, двоє пройдуть `SET NX` — обидва прочитають ту саму картку з бази. Відповідь та сама, рядок у базі не змінюється: це читання. Ціна — зайвий похід у Postgres. Для цього читання лок у Redis достатній. Якби той самий `SET NX` захищав списання залишку, два «переможці» продали б одну одиницю двічі. Залишок тримає транзакція й `UPDATE ... WHERE stock >= qty`.
+
+`REDIS_URL` і `REDIS_QUEUE_URL` лежать у сховищі ДЗ #11, поруч із `DB_URL`. Нового env-файла немає.
+
+## Auth
+
+Access-токен — JWT ES256 на 10 хвилин. Refresh — випадкові 32 байти, у базі лежить лише HMAC-SHA256 від нього з перцем `REFRESH_TOKEN_PEPPER`. Голий SHA-256 від випадкового рядка теж не відновлює токен, але перець робить дамп таблиці марним навіть коли витекла сама база.
+
+Підпис ES256, не RS256. OWASP позначає RS256 як Not recommended і радить ES256, PS256 або EdDSA: у RS256 лишається історія algorithm confusion і PKCS#1 v1.5. ES256 — P-256, коротший ключ, і верифікатор тримає явний allowlist `algorithms: ['ES256']` (RFC 8725 §3.1). Токен з `alg=none` або `alg=HS256` відхиляється до перевірки підпису, тож публічний ключ ніколи не стає HMAC-секретом.
+
+`kid` у заголовку JWT називає ключ, яким токен підписаний. Ротація йде з перекриттям: новий приватний ключ отримує новий `kid` і тільки ним підписує нові токени, а публічний ключ попереднього `kid` лишається в кільці перевірки (`JWT_PREVIOUS_KID` + `JWT_PREVIOUS_PUBLIC_KEY`), поки не протухнуть access-токени, виписані старим ключем. Після цього попередній публічний ключ забирається. Підпис і перевірка в цей час не мають спільної секунди, коли старий токен уже невалідний, а новий ще не видається.
+
+Логаут — це дві різні дії в одному `COMMIT`. `revoked_at` на всю сімʼю refresh-токенів гасить довгий токен, бо він є рядком у базі. Access self-contained і живе до `exp`, тому його `jti` лягає в `access_denylist` з `expires_at`, рівним `exp` токена, і ні секундою далі. Прострочені рядки денилиста видаляються тим самим записом. Денилист у тій самій базі, що й сімʼя: рознести відкликання в Postgres, а денилист у Redis — це dual write з ДЗ #22, і падіння між двома записами лишило б один із токенів живим.
+
+Повторне використання refresh гасить усю сімʼю. Успішний refresh позначає старий токен `used_at` і видає нову пару в тому самому `family_id`. Токен, у якого `used_at` уже стоїть, — сигнал компрометації (RFC 9700 §4.14.2): сімʼя отримує `revoked_at`, у лог іде `family_id`, не сам токен. Вікна благодаті немає. Два паралельні рефреші одного токена виглядають як повтор, тому клієнт серіалізує рефреш одним промісом на всі запити.
+
+Роль у токені — кеш на час життя access. Гард читає `role` з перевіреного payload і не ходить у `users` на кожен запит. Свіжо розжалуваний адмін лишається адміном до `exp` цього access-токена. Наступний refresh читає роль з бази і кладе її вже в новий access.
+
+Межа гарда і власності. `JwtAuthGuard` відповідає лише «хто це?» і не бачить замовлення. `RolesGuard` порівнює роль із токена зі списком на методі: `POST /products` дозволений продавцю й адміну, покупець отримує 403. Власник замовлення перевіряється в `OrdersService.findOne` після `SELECT`: чужий `buyer_id` дає 403, свій — 200. Гард цього не робить, бо до завантаження рядка в нього немає `buyer_id`, інакше він сходив би в базу двічі.
+
+`POST /orders` бере покупця з `sub` токена. `GET /orders/:id` без токена, з протухлим або зі зламаним підписом — 401. Валідний токен чужого покупця — 403.
+
+Відбиток ключа — SHA-256 від SPKI DER публічного ключа. Dev і prod — різні пари. Приватні ключі в репозиторій не входять: їхнє місце — сховище ДЗ #11.
+
+| Оточення | kid | SHA-256 SPKI |
+|---|---|---|
+| dev | `marketplace-dev` | `1d9e49992ce490f8ba30a1f2542183f3d7cc7e59bea388fff29a65f3d2f79dbb` |
+| prod | `marketplace-prod` | `5064aa8450a5e1ae2559a870b30cfad55885104e15ce0a9eb53cf14c26f826ca` |
+
+| Змінна | Джерело | Навіщо |
+|---|---|---|
+| `JWT_PRIVATE_KEY` | сховище (#11) | підпис access-токенів, PKCS8 PEM у base64 |
+| `JWT_PUBLIC_KEY` | сховище (#11) | перевірка підпису, SPKI PEM у base64 |
+| `JWT_KID` | сховище (#11) | `kid` поточного ключа підпису |
+| `REFRESH_TOKEN_PEPPER` | сховище (#11) | HMAC-перець хеша refresh-токена |
+| `DB_URL` | compose / оточення | дев-креденшели, секретом не є |
+| `DATABASE_URL` | compose / оточення | якщо заданий, пул іде сюди; інакше `DB_URL` і файл пароля |
+
+Голий `npm run start` валідує конфіг до пулу Postgres і без ключа завершується з кодом, відмінним від нуля, назвавши змінну. Дефолта в схемі немає. `npm run start:vault`, `demo:auth`, `demo:reuse` і `demo:rbac` ідуть через `scripts/with-secrets.sh`.
+
 ## Grading
+
+```bash
+docker compose up -d --wait
+export DB_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:5432/shop
+export DATABASE_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:5432/shop
+export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
+export SKIP_VAULT=1
+
+node -e 'const {generateKeyPairSync}=require("node:crypto");
+const k=generateKeyPairSync("ec",{namedCurve:"P-256",
+  privateKeyEncoding:{type:"pkcs8",format:"pem"},
+  publicKeyEncoding:{type:"spki",format:"pem"}});
+const fs=require("node:fs");
+fs.writeFileSync("/tmp/priv.b64",Buffer.from(k.privateKey).toString("base64"));
+fs.writeFileSync("/tmp/pub.b64",Buffer.from(k.publicKey).toString("base64"));'
+
+export JWT_KID=grader
+export JWT_PRIVATE_KEY="$(cat /tmp/priv.b64)"
+export JWT_PUBLIC_KEY="$(cat /tmp/pub.b64)"
+export REFRESH_TOKEN_PEPPER=grader-pepper
+
+npm ci
+npx tsc --noEmit
+npm run build
+npm run migrate
+npm run demo:auth
+npm run demo:reuse
+npm run demo:rbac
+```
+
+ES256: пара з `generateKeyPairSync('ec', { namedCurve: 'P-256' })`, PEM у змінні кладеться base64. `package.json` лежить у корені репозиторію, окремий `cd` не потрібен.
+
+```bash
+docker compose up -d --wait
+export REDIS_URL=redis://127.0.0.1:16379
+export REDIS_QUEUE_URL=redis://127.0.0.1:16380
+export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
+export SKIP_VAULT=1
+npm ci
+npx tsc --noEmit
+npm run build
+npm run migrate
+npm run demo:cache
+npm run demo:session
+npm run demo:ratelimit
+npm run demo:queue
+```
 
 ```bash
 docker compose up -d --wait
@@ -252,8 +364,14 @@ Zod validates env on boot (`src/config/env.schema.ts` → `ConfigModule.forRoot(
 | `PORT` | no | `3000` | env | HTTP port |
 | `DB_URL` | yes | — | **secrets store** (hw-11): password from `secrets/db_password`, URL from the untracked `.env` in both `dev` and `prod` | `postgres://user@host:port/db` — points at the hw-12 database (`shop`); the password inside the URL is ignored |
 | `BROKER_URL` | no | — | **secrets store** (hw-11), next to the database URL. Empty means the API boots without publishing | `amqp://user:pass@host:5672` — AMQP port of the hw-19 RabbitMQ. `15672` is the management UI, not AMQP |
+| `REDIS_URL` | no | — | **secrets store** (hw-11), next to `DB_URL`. Empty means product reads skip the cache | `redis://127.0.0.1:16379` — cache Redis, `maxmemory` + `allkeys-lru` |
+| `REDIS_QUEUE_URL` | no | — | **secrets store** (hw-11). Empty means no session rolling, no shared limit, no BullMQ | `redis://127.0.0.1:16380` — queue Redis, `noeviction` + AOF. Sessions and the rate-limit counter live here too |
 | `LOG_LEVEL` | no | `info` | env | `debug` \| `info` \| `warn` \| `error` |
 | `TIMEOUT_MS` | no | `5000` | env | outbound timeout, ms |
+| `JWT_KID` | yes | — | **secrets store** (hw-11) | key id in the access-token header |
+| `JWT_PRIVATE_KEY` | yes | — | **secrets store** (hw-11) | ES256 PKCS8 PEM, base64 |
+| `JWT_PUBLIC_KEY` | yes | — | **secrets store** (hw-11) | ES256 SPKI PEM, base64 |
+| `REFRESH_TOKEN_PEPPER` | yes | — | **secrets store** (hw-11) | HMAC pepper for refresh-token hashes |
 
 `DB_URL` is never committed with a real value: `.env.example` carries the contract with a
 fake password, `.env` is gitignored, and the only credential on disk is

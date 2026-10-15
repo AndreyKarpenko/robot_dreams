@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import type Redis from 'ioredis';
+import { CACHE_REDIS } from '../redis/redis.module';
+import { CreateProductDto } from './dto/create-product.dto';
+import { readProductCard } from './product-card';
 import { ProductRow, ProductsRepository } from './products.repository';
 
 export type ProductResponse = {
@@ -9,7 +13,10 @@ export type ProductResponse = {
 
 @Injectable()
 export class ProductsService {
-  constructor(private readonly products: ProductsRepository) {}
+  constructor(
+    private readonly products: ProductsRepository,
+    @Inject(CACHE_REDIS) private readonly cache: Redis | null,
+  ) {}
 
   async findAll(): Promise<{
     items: ProductResponse[];
@@ -22,12 +29,36 @@ export class ProductsService {
     };
   }
 
+  async create(
+    dto: CreateProductDto,
+    sellerId: string,
+  ): Promise<ProductResponse> {
+    const row = await this.products.insert({
+      name: dto.name,
+      price: dto.price_cents,
+      stock: dto.stock ?? 0,
+      sellerId,
+    });
+    return toProductResponse(row);
+  }
+
   async findOne(id: number): Promise<ProductResponse> {
-    const row = await this.products.findById(id);
-    if (!row) {
+    if (!this.cache) {
+      const row = await this.products.findById(id);
+      if (!row) {
+        throw new NotFoundException();
+      }
+      return toProductResponse(row);
+    }
+    const card = await readProductCard(this.cache, this.products, id);
+    if (!card) {
       throw new NotFoundException();
     }
-    return toProductResponse(row);
+    return {
+      id: Number(card.id),
+      name: card.name,
+      price_cents: card.price,
+    };
   }
 }
 

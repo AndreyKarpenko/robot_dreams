@@ -5,6 +5,8 @@ import { Verifier } from '@pact-foundation/pact';
 import type { VerifierOptions } from '@pact-foundation/pact';
 import { Pool } from 'pg';
 import { PG_POOL } from '../../src/db/database.module';
+import { signAccessToken } from '../../src/auth/jwt';
+import { loadSigningKeys } from '../../src/auth/keys';
 import { createTestingApp } from '../e2e/create-app';
 import { startTestDb, TestDb } from '../integration/testkit/postgres';
 import {
@@ -47,6 +49,22 @@ export async function verifyProvider(): Promise<void> {
     const brokerUrl = process.env.PACT_BROKER_URL;
     const brokerToken = process.env.PACT_BROKER_TOKEN;
 
+    const keys = loadSigningKeys({
+      JWT_KID: process.env.JWT_KID ?? '',
+      JWT_PRIVATE_KEY: process.env.JWT_PRIVATE_KEY ?? '',
+      JWT_PUBLIC_KEY: process.env.JWT_PUBLIC_KEY ?? '',
+    });
+    const { token } = signAccessToken(
+      {
+        userId: '1',
+        role: 'buyer',
+        jti: '11111111-1111-4111-8111-111111111111',
+        familyId: '22222222-2222-4222-8222-222222222222',
+      },
+      keys.kid,
+      keys.privateKey,
+    );
+
     const options: VerifierOptions = {
       provider: PACT_PROVIDER,
       providerBaseUrl,
@@ -62,6 +80,10 @@ export async function verifyProvider(): Promise<void> {
             `UPDATE users SET balance = GREATEST(balance, 1000000) WHERE id = 1`,
           );
         },
+      },
+      requestFilter: (req, _res, next) => {
+        req.headers['authorization'] = `Bearer ${token}`;
+        next();
       },
     };
 
