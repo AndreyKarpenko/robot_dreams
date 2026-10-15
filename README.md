@@ -220,7 +220,74 @@ bash scripts/with-secrets.sh dev bash scripts/restore-drill.sh  # scratch Postgr
 
 `REDIS_URL` і `REDIS_QUEUE_URL` лежать у сховищі ДЗ #11, поруч із `DB_URL`. Нового env-файла немає.
 
+## Auth
+
+Access-токен — JWT ES256 на 10 хвилин. Refresh — випадкові 32 байти, у базі лежить лише HMAC-SHA256 від нього з перцем `REFRESH_TOKEN_PEPPER`. Голий SHA-256 від випадкового рядка теж не відновлює токен, але перець робить дамп таблиці марним навіть коли витекла сама база.
+
+Підпис ES256, не RS256. OWASP позначає RS256 як Not recommended і радить ES256, PS256 або EdDSA: у RS256 лишається історія algorithm confusion і PKCS#1 v1.5. ES256 — P-256, коротший ключ, і верифікатор тримає явний allowlist `algorithms: ['ES256']` (RFC 8725 §3.1). Токен з `alg=none` або `alg=HS256` відхиляється до перевірки підпису, тож публічний ключ ніколи не стає HMAC-секретом.
+
+`kid` у заголовку JWT називає ключ, яким токен підписаний. Ротація йде з перекриттям: новий приватний ключ отримує новий `kid` і тільки ним підписує нові токени, а публічний ключ попереднього `kid` лишається в кільці перевірки (`JWT_PREVIOUS_KID` + `JWT_PREVIOUS_PUBLIC_KEY`), поки не протухнуть access-токени, виписані старим ключем. Після цього попередній публічний ключ забирається. Підпис і перевірка в цей час не мають спільної секунди, коли старий токен уже невалідний, а новий ще не видається.
+
+Логаут — це дві різні дії в одному `COMMIT`. `revoked_at` на всю сімʼю refresh-токенів гасить довгий токен, бо він є рядком у базі. Access self-contained і живе до `exp`, тому його `jti` лягає в `access_denylist` з `expires_at`, рівним `exp` токена, і ні секундою далі. Прострочені рядки денилиста видаляються тим самим записом. Денилист у тій самій базі, що й сімʼя: рознести відкликання в Postgres, а денилист у Redis — це dual write з ДЗ #22, і падіння між двома записами лишило б один із токенів живим.
+
+Повторне використання refresh гасить усю сімʼю. Успішний refresh позначає старий токен `used_at` і видає нову пару в тому самому `family_id`. Токен, у якого `used_at` уже стоїть, — сигнал компрометації (RFC 9700 §4.14.2): сімʼя отримує `revoked_at`, у лог іде `family_id`, не сам токен. Вікна благодаті немає. Два паралельні рефреші одного токена виглядають як повтор, тому клієнт серіалізує рефреш одним промісом на всі запити.
+
+Роль у токені — кеш на час життя access. Гард читає `role` з перевіреного payload і не ходить у `users` на кожен запит. Свіжо розжалуваний адмін лишається адміном до `exp` цього access-токена. Наступний refresh читає роль з бази і кладе її вже в новий access.
+
+Межа гарда і власності. `JwtAuthGuard` відповідає лише «хто це?» і не бачить замовлення. `RolesGuard` порівнює роль із токена зі списком на методі: `POST /products` дозволений продавцю й адміну, покупець отримує 403. Власник замовлення перевіряється в `OrdersService.findOne` після `SELECT`: чужий `buyer_id` дає 403, свій — 200. Гард цього не робить, бо до завантаження рядка в нього немає `buyer_id`, інакше він сходив би в базу двічі.
+
+`POST /orders` бере покупця з `sub` токена. `GET /orders/:id` без токена, з протухлим або зі зламаним підписом — 401. Валідний токен чужого покупця — 403.
+
+Відбиток ключа — SHA-256 від SPKI DER публічного ключа. Dev і prod — різні пари. Приватні ключі в репозиторій не входять: їхнє місце — сховище ДЗ #11.
+
+| Оточення | kid | SHA-256 SPKI |
+|---|---|---|
+| dev | `marketplace-dev` | `1d9e49992ce490f8ba30a1f2542183f3d7cc7e59bea388fff29a65f3d2f79dbb` |
+| prod | `marketplace-prod` | `5064aa8450a5e1ae2559a870b30cfad55885104e15ce0a9eb53cf14c26f826ca` |
+
+| Змінна | Джерело | Навіщо |
+|---|---|---|
+| `JWT_PRIVATE_KEY` | сховище (#11) | підпис access-токенів, PKCS8 PEM у base64 |
+| `JWT_PUBLIC_KEY` | сховище (#11) | перевірка підпису, SPKI PEM у base64 |
+| `JWT_KID` | сховище (#11) | `kid` поточного ключа підпису |
+| `REFRESH_TOKEN_PEPPER` | сховище (#11) | HMAC-перець хеша refresh-токена |
+| `DB_URL` | compose / оточення | дев-креденшели, секретом не є |
+| `DATABASE_URL` | compose / оточення | якщо заданий, пул іде сюди; інакше `DB_URL` і файл пароля |
+
+Голий `npm run start` валідує конфіг до пулу Postgres і без ключа завершується з кодом, відмінним від нуля, назвавши змінну. Дефолта в схемі немає. `npm run start:vault`, `demo:auth`, `demo:reuse` і `demo:rbac` ідуть через `scripts/with-secrets.sh`.
+
 ## Grading
+
+```bash
+docker compose up -d --wait
+export DB_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:5432/shop
+export DATABASE_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:5432/shop
+export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
+export SKIP_VAULT=1
+
+node -e 'const {generateKeyPairSync}=require("node:crypto");
+const k=generateKeyPairSync("ec",{namedCurve:"P-256",
+  privateKeyEncoding:{type:"pkcs8",format:"pem"},
+  publicKeyEncoding:{type:"spki",format:"pem"}});
+const fs=require("node:fs");
+fs.writeFileSync("/tmp/priv.b64",Buffer.from(k.privateKey).toString("base64"));
+fs.writeFileSync("/tmp/pub.b64",Buffer.from(k.publicKey).toString("base64"));'
+
+export JWT_KID=grader
+export JWT_PRIVATE_KEY="$(cat /tmp/priv.b64)"
+export JWT_PUBLIC_KEY="$(cat /tmp/pub.b64)"
+export REFRESH_TOKEN_PEPPER=grader-pepper
+
+npm ci
+npx tsc --noEmit
+npm run build
+npm run migrate
+npm run demo:auth
+npm run demo:reuse
+npm run demo:rbac
+```
+
+ES256: пара з `generateKeyPairSync('ec', { namedCurve: 'P-256' })`, PEM у змінні кладеться base64. `package.json` лежить у корені репозиторію, окремий `cd` не потрібен.
 
 ```bash
 docker compose up -d --wait
@@ -301,6 +368,10 @@ Zod validates env on boot (`src/config/env.schema.ts` → `ConfigModule.forRoot(
 | `REDIS_QUEUE_URL` | no | — | **secrets store** (hw-11). Empty means no session rolling, no shared limit, no BullMQ | `redis://127.0.0.1:16380` — queue Redis, `noeviction` + AOF. Sessions and the rate-limit counter live here too |
 | `LOG_LEVEL` | no | `info` | env | `debug` \| `info` \| `warn` \| `error` |
 | `TIMEOUT_MS` | no | `5000` | env | outbound timeout, ms |
+| `JWT_KID` | yes | — | **secrets store** (hw-11) | key id in the access-token header |
+| `JWT_PRIVATE_KEY` | yes | — | **secrets store** (hw-11) | ES256 PKCS8 PEM, base64 |
+| `JWT_PUBLIC_KEY` | yes | — | **secrets store** (hw-11) | ES256 SPKI PEM, base64 |
+| `REFRESH_TOKEN_PEPPER` | yes | — | **secrets store** (hw-11) | HMAC pepper for refresh-token hashes |
 
 `DB_URL` is never committed with a real value: `.env.example` carries the contract with a
 fake password, `.env` is gitignored, and the only credential on disk is

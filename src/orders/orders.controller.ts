@@ -11,8 +11,12 @@ import {
   Post,
   Req,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { CurrentUser } from '../auth/current-user.decorator';
+import type { AccessClaims } from '../auth/jwt';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { checkOrderOwner, OrderAccess } from './order-access';
@@ -31,14 +35,16 @@ export class OrdersController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
+  @UseGuards(JwtAuthGuard)
   create(
+    @CurrentUser() user: AccessClaims,
     @Body() createOrderDto: CreateOrderDto,
     @Headers('idempotency-key') idempotencyKey?: string | string[],
   ) {
     const key = Array.isArray(idempotencyKey)
       ? idempotencyKey[0]
       : idempotencyKey;
-    return this.ordersService.create(createOrderDto, key);
+    return this.ordersService.create(createOrderDto, user.userId, key);
   }
 
   @Get()
@@ -109,16 +115,22 @@ export class OrdersController {
   }
 
   @Patch(':id/status')
+  @UseGuards(JwtAuthGuard)
   updateStatus(
+    @CurrentUser() user: AccessClaims,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateOrderStatusDto,
   ) {
-    return this.ordersService.updateStatus(id, dto.status);
+    return this.ordersService.updateStatus(id, dto.status, user.userId);
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.ordersService.findOne(id);
+  @UseGuards(JwtAuthGuard)
+  findOne(
+    @CurrentUser() user: AccessClaims,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.ordersService.findOne(id, user.userId);
   }
 }
 

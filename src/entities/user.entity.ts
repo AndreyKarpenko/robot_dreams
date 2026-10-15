@@ -16,6 +16,10 @@ import { Product } from './product.entity';
 @Check('CHK_users_email_shaped', `"email" LIKE '%@%'`)
 @Check('CHK_users_name_nonempty', `"name" <> ''`)
 @Check('CHK_users_balance_nonneg', `"balance" >= 0`)
+@Check(
+  'CHK_users_role_allowed',
+  `"role" IN ('buyer', 'seller', 'admin')`,
+)
 export class User {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
@@ -29,6 +33,12 @@ export class User {
   /** Wallet balance in minor units (cents). Integer, never float. */
   @Column({ type: 'int', default: 0 })
   balance: number;
+
+  @Column({ type: 'text', default: 'buyer' })
+  role: 'buyer' | 'seller' | 'admin';
+
+  @Column({ type: 'text', name: 'password_hash', nullable: true })
+  passwordHash: string | null;
 
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt: Date;
