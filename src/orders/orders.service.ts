@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Inject,
   Injectable,
   InternalServerErrorException,
@@ -48,14 +49,15 @@ export class OrdersService {
 
   async create(
     dto: CreateOrderDto,
+    buyerId: string,
     idempotencyKey?: string,
   ): Promise<CreatedOrderResponse> {
     const key = normalizeIdempotencyKey(idempotencyKey);
     try {
-      return await this.createOnce(dto, key);
+      return await this.createOnce(dto, buyerId, key);
     } catch (err) {
       if (key && isUniqueViolation(err)) {
-        return this.createOnce(dto, key);
+        return this.createOnce(dto, buyerId, key);
       }
       throw err;
     }
@@ -63,9 +65,9 @@ export class OrdersService {
 
   private async createOnce(
     dto: CreateOrderDto,
+    buyerId: string,
     idempotencyKey: string | undefined,
   ): Promise<CreatedOrderResponse> {
-    const buyerId = process.env.DEFAULT_BUYER_ID?.trim();
     if (!buyerId) {
       throw new BadRequestException('buyer is not configured');
     }
@@ -180,15 +182,31 @@ export class OrdersService {
     return { items: [], next_cursor: null };
   }
 
-  async findOne(id: number): Promise<OrderResponse> {
+  async findOne(id: number, userId: string): Promise<OrderResponse> {
     const found = await this.orders.findByIdWithItems(id);
     if (!found) {
       throw new NotFoundException();
     }
+    // The auth guard has already answered "who is this?". Ownership is
+    // answered here, once the row is loaded — the guard has no order to check.
+    if (String(found.order.buyer_id) !== userId) {
+      throw new ForbiddenException();
+    }
     return toOrderResponse(found.order, found);
   }
 
-  async updateStatus(id: number, status: OrderStatus): Promise<OrderResponse> {
+  async updateStatus(
+    id: number,
+    status: OrderStatus,
+    userId: string,
+  ): Promise<OrderResponse> {
+    const existing = await this.orders.findByIdWithItems(id);
+    if (!existing) {
+      throw new NotFoundException();
+    }
+    if (String(existing.order.buyer_id) !== userId) {
+      throw new ForbiddenException();
+    }
     const client = await this.pool.connect();
     let updated: OrderRow;
     let eventId: number;

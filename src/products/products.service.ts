@@ -1,6 +1,7 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type Redis from 'ioredis';
 import { CACHE_REDIS } from '../redis/redis.module';
+import { CreateProductDto } from './dto/create-product.dto';
 import { readProductCard } from './product-card';
 import { ProductRow, ProductsRepository } from './products.repository';
 
@@ -26,6 +27,19 @@ export class ProductsService {
       items: rows.map(toProductResponse),
       next_cursor: null,
     };
+  }
+
+  async create(
+    dto: CreateProductDto,
+    sellerId: string,
+  ): Promise<ProductResponse> {
+    const row = await this.products.insert({
+      name: dto.name,
+      price: dto.price_cents,
+      stock: dto.stock ?? 0,
+      sellerId,
+    });
+    return toProductResponse(row);
   }
 
   async findOne(id: number): Promise<ProductResponse> {
