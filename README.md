@@ -191,7 +191,52 @@ bash scripts/with-secrets.sh dev bash scripts/restore-drill.sh  # scratch Postgr
 
 Розклад нічного дампу — [`backup.cron`](backup.cron). Протокол drill-у (RTO/RPO) — [`RESTORE-DRILL.md`](RESTORE-DRILL.md). Міграції TypeORM лишайте на `:5432`: DDL через transaction pooling часто падає.
 
+## Redis: кеш, сесії, ліміти, черга
+
+Картка товару (`products` ⨝ продавець ⨝ сума `order_items`) читається через cache-aside. Промах іде в Postgres і пише ключ з TTL `300 + random(0..60)` секунд. Влучання Redis не чіпає базу. Запис у кеш обгорнутий: помилка Redis не валить HTTP-запит.
+
+Лавина на зниклий ключ бере `SET lock:… <token> NX PX`. Решта чекає і перечитує кеш. Лок знімає Lua compare-and-delete, не голий `DEL`.
+
+Сесії і лічильник ліміту лежать у **черговому** Redis (`REDIS_QUEUE_URL`, `noeviction`), не в кеші. `allkeys-lru` колись викине сесію або обнулить ліміт, і це не відтворити. Окремий третій контейнер був би теж правильним; черга, сесія і ліміт мають одну вимогу — ключ не можна витісняти — тому їм вистачає одного інстансу з AOF `everysec`.
+
+Ліміт — ковзне вікно одним Lua-скриптом. Сплеск на межі двох фіксованих вікон (до 2× ліміту за частку секунди) тут не пропускаємо. Два з’єднання ділять один ключ, тож ліміт не множиться на кількість подів. Перевищення — `429` і `Retry-After`.
+
+Черга BullMQ `hw23-ratings` перераховує картку поза HTTP: `attempts: 5`, `backoff: { type: 'exponential', delay: 200, jitter: 0.2 }`, `jobId` без `removeOnComplete: true`, планувальник через `upsertJobScheduler`.
+
+Два контейнери, бо `maxmemory-policy` одна на процес. Кеш: `maxmemory 32mb` + `allkeys-lru` (`redis-cache`, порт **16379**). Черга: `noeviction` + AOF (`redis-queue`, порт **16380**). `SELECT 1` політику не розводить.
+
+Прогін `SKIP_VAULT=1` (13 жовтня 2026):
+
+| Демо | Вивід |
+|---|---|
+| `demo:cache` | `cache-lru=1` `cache-maxmemory=1` `warmed=60` `ttl-distinct=38` `concurrent=24` `db-calls=1` `db-calls-warm=0` |
+| `demo:session` | `requests=3` `sessions=1` `in-redis=1` `ttl-renewed=1` |
+| `demo:ratelimit` | `instances=2` `limit=5` `requests=8` `allowed=5` `blocked=3` `status=429` `retry-after=1` |
+| `demo:queue` | `queue-noeviction=1` `attempts=3` `completed=1` `added=2` `queued=1` `schedulers=1` `scheduled-runs=3` |
+
+`ttl-distinct` плаває: попередній прогін дав 37. `db-calls` лишився 1.
+
+Якщо stampede-лок зламається — протухне, процес зупиниться, двоє пройдуть `SET NX` — обидва прочитають ту саму картку з бази. Відповідь та сама, рядок у базі не змінюється: це читання. Ціна — зайвий похід у Postgres. Для цього читання лок у Redis достатній. Якби той самий `SET NX` захищав списання залишку, два «переможці» продали б одну одиницю двічі. Залишок тримає транзакція й `UPDATE ... WHERE stock >= qty`.
+
+`REDIS_URL` і `REDIS_QUEUE_URL` лежать у сховищі ДЗ #11, поруч із `DB_URL`. Нового env-файла немає.
+
 ## Grading
+
+```bash
+docker compose up -d --wait
+export REDIS_URL=redis://127.0.0.1:16379
+export REDIS_QUEUE_URL=redis://127.0.0.1:16380
+export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
+export SKIP_VAULT=1
+npm ci
+npx tsc --noEmit
+npm run build
+npm run migrate
+npm run demo:cache
+npm run demo:session
+npm run demo:ratelimit
+npm run demo:queue
+```
 
 ```bash
 docker compose up -d --wait
@@ -252,6 +297,8 @@ Zod validates env on boot (`src/config/env.schema.ts` → `ConfigModule.forRoot(
 | `PORT` | no | `3000` | env | HTTP port |
 | `DB_URL` | yes | — | **secrets store** (hw-11): password from `secrets/db_password`, URL from the untracked `.env` in both `dev` and `prod` | `postgres://user@host:port/db` — points at the hw-12 database (`shop`); the password inside the URL is ignored |
 | `BROKER_URL` | no | — | **secrets store** (hw-11), next to the database URL. Empty means the API boots without publishing | `amqp://user:pass@host:5672` — AMQP port of the hw-19 RabbitMQ. `15672` is the management UI, not AMQP |
+| `REDIS_URL` | no | — | **secrets store** (hw-11), next to `DB_URL`. Empty means product reads skip the cache | `redis://127.0.0.1:16379` — cache Redis, `maxmemory` + `allkeys-lru` |
+| `REDIS_QUEUE_URL` | no | — | **secrets store** (hw-11). Empty means no session rolling, no shared limit, no BullMQ | `redis://127.0.0.1:16380` — queue Redis, `noeviction` + AOF. Sessions and the rate-limit counter live here too |
 | `LOG_LEVEL` | no | `info` | env | `debug` \| `info` \| `warn` \| `error` |
 | `TIMEOUT_MS` | no | `5000` | env | outbound timeout, ms |
 

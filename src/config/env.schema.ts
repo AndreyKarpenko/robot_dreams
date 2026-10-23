@@ -11,6 +11,22 @@ export const envSchema = z.object({
       .regex(/^amqps?:\/\/.+/, 'must be an amqp URL')
       .optional(),
   ),
+  REDIS_URL: z.preprocess(
+    (value) =>
+      typeof value === 'string' && value.trim() === '' ? undefined : value,
+    z
+      .string()
+      .regex(/^rediss?:\/\/.+/, 'must be a redis URL')
+      .optional(),
+  ),
+  REDIS_QUEUE_URL: z.preprocess(
+    (value) =>
+      typeof value === 'string' && value.trim() === '' ? undefined : value,
+    z
+      .string()
+      .regex(/^rediss?:\/\/.+/, 'must be a redis URL')
+      .optional(),
+  ),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
 });
