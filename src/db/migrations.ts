@@ -4,3 +4,4 @@ export { OrderStatusEvents1762300000000 } from '../migrations/1762300000000-Orde
 export { OrderPlacedEffects1762400000000 } from '../migrations/1762400000000-OrderPlacedEffects';
 export { OutboxAndInbox1762600000000 } from '../migrations/1762600000000-OutboxAndInbox';
 export { AuthTokens1762700000000 } from '../migrations/1762700000000-AuthTokens';
+export { Files1762800000000 } from '../migrations/1762800000000-Files';

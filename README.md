@@ -256,7 +256,158 @@ Access-токен — JWT ES256 на 10 хвилин. Refresh — випадко
 
 Голий `npm run start` валідує конфіг до пулу Postgres і без ключа завершується з кодом, відмінним від нуля, назвавши змінну. Дефолта в схемі немає. `npm run start:vault`, `demo:auth`, `demo:reuse` і `demo:rbac` ідуть через `scripts/with-secrets.sh`.
 
+## Files
+
+Файли курсу (фото, аватарки, дампи) не лежать на диску інстансу. Клієнт просить намір, кладе байти прямо у сховище за presigned URL, потім комітить. Поки API вимкнений, PUT все одно доїжджає: у процесі завантаження немає ключів сховища, є тільки підписаний URL.
+
+| Змінна | Джерело | Навіщо |
+|---|---|---|
+| `STORAGE_ENDPOINT` | compose / оточення грейдера | S3 API. Порожньо — справжній AWS S3. Локально MinIO `http://127.0.0.1:22650` |
+| `STORAGE_REGION` | оточення, дефолт `us-east-1` | регіон SigV4. Емулятору теж потрібен |
+| `STORAGE_ACCESS_KEY` | сховище секретів (#11) | ключ доступу. На стенді збігається з `MINIO_ROOT_USER` у compose; це дев-креденшел, не секрет продакшена |
+| `STORAGE_SECRET_KEY` | сховище секретів (#11) | секрет. Витік — це право читати й писати всі обʼєкти |
+| `STORAGE_BUCKET` | оточення | бакет `hw26-files`. Публічної політики немає |
+| `PRESIGN_EXPIRES_SEC` | код, дефолт `120`, стеля 15 хв | строк presigned URL |
+
+Нових env-файлів немає. Демо йдуть через `scripts/with-secrets.sh`, як `migrate` / `seed`. Грейдер ставить `SKIP_VAULT=1` і експортує значення сам. У лог пишеться `fileId` і ключ обʼєкта, не сам URL: рядок URL — це вже виданий доступ.
+
+### Presigned: 120 секунд
+
+Аватарка йде з форми: браузер одразу кладе файл. Presigned URL не відкликається — немає ні `jti`, ні реєстру, — тому єдиний важіль це короткий строк. Дві хвилини вистачає на форму й повільний мобільний upload фото до 5 МіБ і закінчується раніше, ніж URL із access-логу ще корисний. Стеля SigV4 — 7 діб, але в проді підпис помирає разом із сесією ролі (STS зазвичай година), тож «сім днів» часто означає годину. Частини multipart підписуються знову на `POST /uploads/:id/resume`, тому довгий дамп не вимагає довгого URL. Демо чекає три секунди на підписі з `X-Amz-Expires=1` (той самий клієнт і той самий механізм) і отримує `expired=403`, щоб не тримати грейдер дві хвилини. Продуктовий URL з intent підписаний на 120.
+
+Ключ генерує сервер: `uploads/{userId}/{uuid}.{ext}`. Розширення береться з allowlist за `contentType`, не з `filename`. Навмисне імʼя `../../etc/passwd` у ключ не потрапляє (`key-from-server=1`). Подвійний тап закриває `Idempotency-Key`: другий intent з тим самим ключем повертає той самий рядок і не створює другий обʼєкт. `commit` робить `HeadObject` і звіряє розмір; без байтів це `409`. Для картинок на commit ще звіряються magic bytes.
+
+### Multipart
+
+У документації S3 в multipart чотири переваги: паралельна пропускна здатність, відновлення після обриву, пауза і продовження, старт до того, як відомий фінальний розмір. Про розмір файла — окремо й лише одна теза (понад 5 ГБ інакше не залити). Демо доводить відновлення, не «вмію великі файли».
+
+Частин не більше 10 000, мінімум кожної крім останньої — 5 МіБ (`EntityTooSmall`). Тому `partSize = max(5 МіБ, ceil(fileSize / 10 000))`, а поріг multipart — ті самі 5 МіБ: менше одним PUT не розрізати. Демо-файл — два повні частини й короткий хвіст, рівно три. Перший процес заливає дві й помирає. Другий, без ключів сховища, питає `ListParts` через API і доливає одну (`resumed-parts=1`). До `Complete` обʼєкта немає (`HeadObject` → 404). Після — розмір збігається, а ETag має суфікс `-3` і не є MD5 файла.
+
+Незавершений multipart тарифікується, хоча обʼєкта немає. На AWS бакет отримує окреме правило lifecycle — це не те саме, що «видалити обʼєкти старші за 30 днів», і друге хвости не чіпає:
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "abort-incomplete-multipart",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "uploads/" },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}
+```
+
+Локальний MinIO `RELEASE.2025-09-07` це правило не зберігає: `PutBucketLifecycleConfiguration` лише з abort не проходить схему, а разом з іншою дією відповідь `Get` вже без abort. Тому на стенді хвости збирає джоба, не lifecycle. `node dist/sweep-uploads.js` (BullMQ, черга `hw26-upload-sweep`, раз на годину, потрібен `REDIS_QUEUE_URL`) бере `PENDING` старші за добу: `AbortMultipartUpload`, `DeleteObject`, `DELETE` рядка. У процес API вона не вшита, щоб відсутній Redis не тримав старт демо.
+
+Дамп із ДЗ #15 тепер має куди лягти: обʼєкт, не тека на інстансі. Glacier ламає RTO (обʼєкт спершу треба відновити), а lifecycle не замінює restore-drill.
+
+### CDN
+
+Обрана форма — локальний edge (`src/cdn/edge.ts`), не CloudFront. Це і є ідея OAC: бакет без публічної політики, анонімний GET у MinIO дає 403, а edge читає обʼєкт своїми креденшелами, кладе в кеш і віддає `X-Cache: HIT|MISS`. `Cache-Control` стоїть на обʼєкті в момент `PutObject` (`public, max-age=31536000, immutable`). Без нього з origin edge нічого не кешує. Імʼя публічного ассета містить хеш вмісту (`assets/app.{sha256-8}.css`). Новий деплой — новий URL; старий запис у кеші нікому не заважає, інвалідацій нуль. AWS про це каже прямо: для файлів, які часто змінюються, спершу версіонувати імʼя, а не інвалідувати.
+
+Для справжнього CloudFront бакет лишається закритим для публіки й відкритим лише для однієї дистрибуції. Без `Condition` з `AWS:SourceArn` читати зміг би будь-який CloudFront у світі:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowCloudFrontServicePrincipalReadOnly",
+      "Effect": "Allow",
+      "Principal": { "Service": "cloudfront.amazonaws.com" },
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::hw26-files/*",
+      "Condition": {
+        "StringEquals": {
+          "AWS:SourceArn": "arn:aws:cloudfront::ACCOUNT_ID:distribution/DISTRIBUTION_ID"
+        }
+      }
+    }
+  ]
+}
+```
+
+Приватний контент сюди не входить. План, якщо знадобиться: `GET /files/:id` під гардом відповідає `302` на свіжий presigned на хвилину. Гард лишається на кожному читанні, байти — ні.
+
+### Прогони
+
+Локально, MinIO на `:22650`, обидва multipart-прогони однакові.
+
+`demo:upload`
+
+```
+intent=200
+key-from-server=1
+api-alive=0
+put-offline=200
+commit=200
+commit-without-bytes=409
+tampered=403
+expired=403
+```
+
+`demo:multipart` (двічі)
+
+```
+head-before-complete=404
+resumed-parts=1
+complete=200
+size-match=1
+etag-multipart=1
+```
+
+`demo:cdn`
+
+```
+direct=403
+edge-miss=200
+edge-hit=200
+cache-hit=1
+new-name=1
+new-url=200
+content-changed=1
+```
+
 ## Grading
+
+hw-26. `package.json` у корені, окремий `cd` не потрібен. API з ДЗ #24 без JWT не стартує, міграції читають `DB_HOST` / `DB_PASSWORD`, пул демо — `DATABASE_URL`, тому блок експортує і їх. Ключі підпису генеруються в `/tmp`, у репозиторій не потрапляють.
+
+```bash
+docker compose up -d --wait
+export STORAGE_ENDPOINT=http://127.0.0.1:22650
+export STORAGE_REGION=us-east-1
+export STORAGE_ACCESS_KEY=hw26user
+export STORAGE_SECRET_KEY=hw26secretpass
+export STORAGE_BUCKET=hw26-files
+export DB_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:5432/shop
+export DATABASE_URL=postgres://admin:admin-bootstrap-only@127.0.0.1:5432/shop
+export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=admin DB_PASSWORD=admin-bootstrap-only DB_NAME=shop
+export SKIP_VAULT=1
+
+node -e 'const {generateKeyPairSync}=require("node:crypto");
+const k=generateKeyPairSync("ec",{namedCurve:"P-256",
+  privateKeyEncoding:{type:"pkcs8",format:"pem"},
+  publicKeyEncoding:{type:"spki",format:"pem"}});
+const fs=require("node:fs");
+fs.writeFileSync("/tmp/priv.b64",Buffer.from(k.privateKey).toString("base64"));
+fs.writeFileSync("/tmp/pub.b64",Buffer.from(k.publicKey).toString("base64"));'
+
+export JWT_KID=grader
+export JWT_PRIVATE_KEY="$(cat /tmp/priv.b64)"
+export JWT_PUBLIC_KEY="$(cat /tmp/pub.b64)"
+export REFRESH_TOKEN_PEPPER=grader-pepper
+
+npm ci
+npx tsc --noEmit
+npm run build
+npm run migrate
+npm run demo:upload
+npm run demo:multipart
+npm run demo:cdn
+```
+
+Попередні домашні:
 
 ```bash
 docker compose up -d --wait
@@ -372,6 +523,12 @@ Zod validates env on boot (`src/config/env.schema.ts` → `ConfigModule.forRoot(
 | `JWT_PRIVATE_KEY` | yes | — | **secrets store** (hw-11) | ES256 PKCS8 PEM, base64 |
 | `JWT_PUBLIC_KEY` | yes | — | **secrets store** (hw-11) | ES256 SPKI PEM, base64 |
 | `REFRESH_TOKEN_PEPPER` | yes | — | **secrets store** (hw-11) | HMAC pepper for refresh-token hashes |
+| `STORAGE_ENDPOINT` | no | — | compose / grader env. Empty means AWS S3 | S3 API. Local MinIO is `http://127.0.0.1:22650` |
+| `STORAGE_REGION` | no | `us-east-1` | env | SigV4 region |
+| `STORAGE_ACCESS_KEY` | no | — | **secrets store** (hw-11) | storage access key. Unset boots the API without uploads |
+| `STORAGE_SECRET_KEY` | no | — | **secrets store** (hw-11) | storage secret. Unset boots the API without uploads |
+| `STORAGE_BUCKET` | no | — | env | bucket name. Local stand uses `hw26-files` |
+| `PRESIGN_EXPIRES_SEC` | no | `120` | env, cap 15 min | presigned URL lifetime. See [Files](#files) |
 
 `DB_URL` is never committed with a real value: `.env.example` carries the contract with a
 fake password, `.env` is gitignored, and the only credential on disk is

@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { join } from 'node:path';
 import { DataSource } from 'typeorm';
 import { Job } from './entities/job.entity';
+import { StoredFile } from './entities/stored-file.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { Order } from './entities/order.entity';
 import { Product } from './entities/product.entity';
@@ -24,7 +25,7 @@ const AppDataSource = new DataSource({
   database: env('DB_NAME'),
   synchronize: false,
   logging: false,
-  entities: [User, Product, Order, OrderItem, Job],
+  entities: [User, Product, Order, OrderItem, Job, StoredFile],
   migrations: [join(__dirname, 'migrations', '*.js')],
 });
 

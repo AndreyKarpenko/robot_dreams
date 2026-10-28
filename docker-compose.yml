@@ -88,6 +88,25 @@ services:
       retries: 20
       start_period: 20s
 
+  # hw-26. tmpfs is 1g on purpose: 256m dies mid-suite and looks like an app bug.
+  # Removing the container drops the disk, so the next up starts empty.
+  storage:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ['server', '/data']
+    ports:
+      - '22650:9000'
+    environment:
+      MINIO_ROOT_USER: hw26user
+      MINIO_ROOT_PASSWORD: hw26secretpass
+    tmpfs:
+      - /data:rw,size=1g
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 2s
+      timeout: 5s
+      retries: 20
+      start_period: 3s
+
   pact-db:
     image: postgres:16-alpine
     environment:

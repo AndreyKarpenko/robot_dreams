@@ -105,9 +105,14 @@ export type HttpResult = { status: number; body: unknown };
 export async function call(
   base: string,
   path: string,
-  init: { method?: string; token?: string; body?: unknown } = {},
+  init: {
+    method?: string;
+    token?: string;
+    body?: unknown;
+    headers?: Record<string, string>;
+  } = {},
 ): Promise<HttpResult> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...init.headers };
   if (init.body !== undefined) {
     headers['content-type'] = 'application/json';
   }
@@ -154,10 +159,10 @@ export function tamperRole(access: string): string {
   return t.join('.');
 }
 
-export async function withApp(
+export async function withApp<T>(
   port: number,
-  fn: (base: string) => Promise<void>,
-): Promise<void> {
+  fn: (base: string) => Promise<T>,
+): Promise<T> {
   const child = spawn(process.execPath, [join(__dirname, 'main.js')], {
     env: { ...process.env, PORT: String(port) },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -181,7 +186,7 @@ export async function withApp(
 
   try {
     await waitHealthy(child, port, () => logs);
-    await fn(`http://127.0.0.1:${port}`);
+    return await fn(`http://127.0.0.1:${port}`);
   } catch (err) {
     const tail = logs.trim();
     if (tail) {
