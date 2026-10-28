@@ -109,12 +109,14 @@ async function upsertUser(
   balance: number,
 ): Promise<User> {
   const repo = AppDataSource.getRepository(User);
+  const role: User['role'] = email.startsWith('seller.') ? 'seller' : 'buyer';
   let user = await repo.findOne({ where: { email } });
   if (!user) {
-    user = repo.create({ email, name, balance });
+    user = repo.create({ email, name, balance, role });
   } else {
     user.name = name;
     user.balance = balance;
+    user.role = role;
   }
   return repo.save(user);
 }

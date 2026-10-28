@@ -2,6 +2,7 @@ import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { Pool } from 'pg';
 import { DataSource } from 'typeorm';
 import {
+  AuthTokens1762700000000,
   InitialSchema1757520000000,
   OrderStatusEvents1762300000000,
   OutboxAndInbox1762600000000,
@@ -28,6 +29,7 @@ export async function startTestDb(): Promise<TestDb> {
       StockBalanceAndJobs1760000000000,
       OrderStatusEvents1762300000000,
       OutboxAndInbox1762600000000,
+      AuthTokens1762700000000,
     ],
     synchronize: false,
     logging: false,

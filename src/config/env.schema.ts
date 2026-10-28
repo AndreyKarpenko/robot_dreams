@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { loadSigningKeys } from '../auth/keys';
 
 export const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -29,6 +30,11 @@ export const envSchema = z.object({
   ),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  // No defaults: a fallback here would be a signing key baked into the code.
+  JWT_KID: z.string().trim().min(1),
+  JWT_PRIVATE_KEY: z.string().trim().min(1),
+  JWT_PUBLIC_KEY: z.string().trim().min(1),
+  REFRESH_TOKEN_PEPPER: z.string().trim().min(1),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -43,5 +49,6 @@ export function validate(raw: Record<string, unknown>): Env {
       `Invalid environment configuration:\n${lines}\nCompare your .env with .env.example.`,
     );
   }
+  loadSigningKeys(parsed.data);
   return parsed.data;
 }
