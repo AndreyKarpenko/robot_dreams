@@ -10,6 +10,7 @@ import { DatabaseModule } from './db/database.module';
 import { HealthController } from './health/health.controller';
 import { RedisModule } from './redis/redis.module';
 import { AuthModule } from './auth/auth.module';
+import { UploadsModule } from './uploads/uploads.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { AuthModule } from './auth/auth.module';
     AuthModule,
     ProductsModule,
     OrdersModule,
+    UploadsModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],

@@ -1,5 +1,18 @@
 import { z } from 'zod';
 import { loadSigningKeys } from '../auth/keys';
+import { PRESIGN_TTL_CAP_SEC, PRESIGN_TTL_SEC } from '../storage/limits';
+
+function blankToUndefined(value: unknown): unknown {
+  if (typeof value === 'string' && value.trim() === '') {
+    return undefined;
+  }
+  return value;
+}
+
+const optionalText = z.preprocess(
+  blankToUndefined,
+  z.string().trim().min(1).optional(),
+);
 
 export const envSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -35,6 +48,21 @@ export const envSchema = z.object({
   JWT_PRIVATE_KEY: z.string().trim().min(1),
   JWT_PUBLIC_KEY: z.string().trim().min(1),
   REFRESH_TOKEN_PEPPER: z.string().trim().min(1),
+  // Empty endpoint means real AWS S3. Emulators set a URL and path-style.
+  STORAGE_ENDPOINT: optionalText,
+  STORAGE_REGION: z.preprocess(
+    blankToUndefined,
+    z.string().trim().min(1).default('us-east-1'),
+  ),
+  STORAGE_ACCESS_KEY: optionalText,
+  STORAGE_SECRET_KEY: optionalText,
+  STORAGE_BUCKET: optionalText,
+  PRESIGN_EXPIRES_SEC: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(PRESIGN_TTL_CAP_SEC)
+    .default(PRESIGN_TTL_SEC),
 });
 
 export type Env = z.infer<typeof envSchema>;
