@@ -14,19 +14,10 @@ REPORT="$(mktemp -t scan-XXXXXX.json)"
 trap 'rm -f "$REPORT"' EXIT
 
 if ! command -v trivy >/dev/null 2>&1; then
-  # Install a local binary (no sudo) before falling back to a container pull.
-  mkdir -p "$ROOT/.bin"
-  if [ ! -x "$ROOT/.bin/trivy" ]; then
-    curl -fsSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-      | sh -s -- -b "$ROOT/.bin" v0.58.1
-  fi
-  if [ -x "$ROOT/.bin/trivy" ]; then
-    SCAN_CMD=("$ROOT/.bin/trivy")
-  else
-    SCAN_CMD=(docker run --rm
-      -v /var/run/docker.sock:/var/run/docker.sock
-      aquasec/trivy:0.58.1)
-  fi
+  # Prefer a containerized scanner when the host binary is missing.
+  SCAN_CMD=(docker run --rm
+    -v /var/run/docker.sock:/var/run/docker.sock
+    aquasec/trivy:0.58.1)
 else
   SCAN_CMD=(trivy)
 fi
