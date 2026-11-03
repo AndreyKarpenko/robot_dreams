@@ -19,6 +19,7 @@ infra/bin/
 infra/node_modules/
 
 /docker/build/
+.bin/
 
 # Logs
 logs

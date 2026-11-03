@@ -34,8 +34,10 @@ jobs:
           npm run image:build
       - name: Install Trivy
         run: |
+          mkdir -p "$HOME/.local/bin"
           curl -fsSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v0.58.1
+            | sh -s -- -b "$HOME/.local/bin" v0.58.1
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Scan image (computed threshold)
         run: SCAN_MAX=100 npm run scan
 
