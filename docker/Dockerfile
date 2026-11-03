@@ -16,7 +16,8 @@ RUN --mount=type=secret,id=npm_token \
     npm ci --offline --no-audit --no-fund && \
     npx tsc --version >/dev/null
 
-# Precompiled by scripts/image-build.sh (host has @types/node).
+# Entrypoint compiled from src/k8s-app.ts and committed as docker/k8s-app.js
+# (avoids host `npx tsc` in CI, which resolves the wrong npm package).
 COPY docker/k8s-app.js ./k8s-app.js
 RUN rm -rf node_modules package.json package-lock.json vendor
 

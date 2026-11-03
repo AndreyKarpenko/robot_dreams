@@ -28,11 +28,14 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
-          cache: npm
       - name: Build production image
         run: |
           printf 'ci-npm-token' > .npm_token
           npm run image:build
+      - name: Install Trivy
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v0.58.1
       - name: Scan image (computed threshold)
         run: SCAN_MAX=100 npm run scan
 
