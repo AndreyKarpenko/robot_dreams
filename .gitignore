@@ -11,6 +11,16 @@
 /secrets/*
 !/secrets/*.example
 .secrets/
+.npm_token
+
+# Pulumi local file backend (hw-28)
+.pulumi/
+infra/bin/
+infra/node_modules/
+
+# Host-compiled entrypoint copied into the image (rebuilt by image:build)
+/docker/k8s-app.js
+/docker/build/
 
 # Logs
 logs

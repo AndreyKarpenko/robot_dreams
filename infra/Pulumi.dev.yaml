@@ -1,0 +1,7 @@
+config:
+  marketplace-hw28:replicas: "2"
+  marketplace-hw28:image: "marketplace-api:hw28"
+  marketplace-hw28:drainMs: "5000"
+  marketplace-hw28:warmupMs: "4000"
+  marketplace-hw28:rev: "r-1793735467"
+encryptionsalt: v1:e/BmoNE5N1I=:v1:C+l+GBDis28Td31u:Xmn+6999LK0ZZ+wI15RBr9FdHXsa3Q==
