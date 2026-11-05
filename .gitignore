@@ -11,6 +11,15 @@
 /secrets/*
 !/secrets/*.example
 .secrets/
+.npm_token
+
+# Pulumi local file backend (hw-28)
+.pulumi/
+infra/bin/
+infra/node_modules/
+
+/docker/build/
+.bin/
 
 # Logs
 logs

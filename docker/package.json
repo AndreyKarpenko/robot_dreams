@@ -1,0 +1,7 @@
+{
+  "name": "marketplace-k8s-app-build",
+  "private": true,
+  "devDependencies": {
+    "typescript": "file:./vendor/typescript-5.7.3.tgz"
+  }
+}

@@ -247,10 +247,10 @@ Access-токен — JWT ES256 на 10 хвилин. Refresh — випадко
 
 | Змінна | Джерело | Навіщо |
 |---|---|---|
-| `JWT_PRIVATE_KEY` | сховище (#11) | підпис access-токенів, PKCS8 PEM у base64 |
-| `JWT_PUBLIC_KEY` | сховище (#11) | перевірка підпису, SPKI PEM у base64 |
-| `JWT_KID` | сховище (#11) | `kid` поточного ключа підпису |
-| `REFRESH_TOKEN_PEPPER` | сховище (#11) | HMAC-перець хеша refresh-токена |
+| `JWT_PRIVATE_KEY` | Infisical (#11) | підпис access-токенів, PKCS8 PEM у base64 |
+| `JWT_PUBLIC_KEY` | Infisical (#11) | перевірка підпису, SPKI PEM у base64 |
+| `JWT_KID` | Infisical (#11) | `kid` поточного ключа підпису |
+| `REFRESH_TOKEN_PEPPER` | Infisical (#11) | HMAC-перець хеша refresh-токена |
 | `DB_URL` | compose / оточення | дев-креденшели, секретом не є |
 | `DATABASE_URL` | compose / оточення | якщо заданий, пул іде сюди; інакше `DB_URL` і файл пароля |
 
@@ -264,8 +264,8 @@ Access-токен — JWT ES256 на 10 хвилин. Refresh — випадко
 |---|---|---|
 | `STORAGE_ENDPOINT` | compose / оточення грейдера | S3 API. Порожньо — справжній AWS S3. Локально MinIO `http://127.0.0.1:22650` |
 | `STORAGE_REGION` | оточення, дефолт `us-east-1` | регіон SigV4. Емулятору теж потрібен |
-| `STORAGE_ACCESS_KEY` | сховище секретів (#11) | ключ доступу. На стенді збігається з `MINIO_ROOT_USER` у compose; це дев-креденшел, не секрет продакшена |
-| `STORAGE_SECRET_KEY` | сховище секретів (#11) | секрет. Витік — це право читати й писати всі обʼєкти |
+| `STORAGE_ACCESS_KEY` | Infisical (#11) | ключ доступу. На стенді збігається з `MINIO_ROOT_USER` у compose; це дев-креденшел, не секрет продакшена |
+| `STORAGE_SECRET_KEY` | Infisical (#11) | секрет. Витік — це право читати й писати всі обʼєкти |
 | `STORAGE_BUCKET` | оточення | бакет `hw26-files`. Публічної політики немає |
 | `PRESIGN_EXPIRES_SEC` | код, дефолт `120`, стеля 15 хв | строк presigned URL |
 
@@ -369,9 +369,70 @@ new-url=200
 content-changed=1
 ```
 
+## Kubernetes
+
+Локальний одновузловий кластер на **kind** (`k8s/kind-config.yaml`), імʼя `hw28`. Піднімав на Docker Desktop (Total Memory ≈ 7,7 ГіБ); окремий `--memory` для kind-ноди не ставив — дефолту вистачає. На тісніших ≈ 3,8 ГіБ kind зазвичай виграє в minikube (старт ~10 с і ≈ 520–545 МіБ проти 18–19 с / 620–770 МіБ; minikube не стартує з `--memory` меншим за 1800 МБ) — тому обрано kind.
+
+Production-образ (`docker/Dockerfile`) — мультистейдж (≥ 2 `FROM`), фінальна стадія `gcr.io/distroless/nodejs22-debian12:nonroot`, процес UID `65532`. Entrypoint `k8s-app.js`: прогрів ≈ 4 с до `listen()`, `/healthz` (liveness) і `/readyz` (readiness) на різних шляхах, на SIGTERM спочатку гасить readiness, тримає сокет `DRAIN_MS` (5 с), потім `close()`. `terminationGracePeriodSeconds` більший за дренаж.
+
+Секрет збірки — BuildKit (`RUN --mount=type=secret,id=npm_token`); файл-приманка `.npm_token` у git не входить. Секрет рантайму — `APP_DB_PASSWORD` зі сховища #11: `scripts/with-secrets.sh` → Pulumi створює K8s Secret (`data` у base64), Deployment читає лише `secretKeyRef`. У маніфесті значення немає. Base64 у Secret — це не шифрування: у локальному etcd без encryption-provider значення лежить відкритим текстом; «поклав у Secret» означає «прибрав із git».
+
+| Змінна | Джерело | Навіщо |
+|---|---|---|
+| `APP_DB_PASSWORD` | сховище (#11) | пароль до БД, їде в K8s Secret |
+| `PULUMI_CONFIG_PASSPHRASE` | сховище (#11) | ключ шифрування стану Pulumi |
+
+У програмі лишається `spec.replicas` разом із HPA (`autoscaling/v2`, CPU 70 %, min 2 / max 4). У kind немає metrics-server, тож HPA показує `cpu: <unknown>/70%` і не масштабує — це очікувано. У бойовому кластері з metrics-server це вже **конфлікт володіння полем**: і Pulumi-програма, і HPA пишуть у `replicas`; контролер HPA переможе в рантаймі, а наступний `pulumi up` може відкотити розмір назад. Тому в проді `replicas` прибирають з програми після першого застосування або керують мінімумом лише через HPA.
+
+Промислові шляхи для секретів рантайму (оператор у цей кластер не ставимо): **ESO** (External Secrets Operator) синхронізує значення зі сховища в K8s Secret за Cron/event; **CSI Secrets Store** монтує секрет томом безпосередньо в под без обовʼязкового проміжного Secret-обʼєкта. Обидва прибирають секрет із git і з Pulumi-стану сильніше, ніж ручний `secretKeyRef`.
+
+PDB: `minAvailable: 1` при 2 репліках — одне виселення дозволене, друге дає 429. `minAvailable == replicas` заблокував би будь-який drain.
+
+### Бонус (без балів)
+
+`startupProbe` на `/healthz` (failureThreshold 30 × 1 с) дає ~30 с до першого рестарту liveness під час повільного старту. Альтернатива — підняти `initialDelaySeconds` у liveness до того ж порядку: тоді зонд мовчить фіксовано навіть після готовості, і зависання на 5-й секунді після старту не ловиться ще ~25 с. `startupProbe` вимикається назавжди після першого успіху.
+
+### Команди
+
+```bash
+npm run image:build      # docker/Dockerfile → marketplace-api:hw28
+npm run cluster:up       # kind create + kind load docker-image
+npm run up               # pulumi up (через with-secrets.sh)
+npm run demo:image
+npm run demo:rollout     # failed=0 при requests ≥ 5000
+npm run demo:pdb         # evict-1=201, evict-2=429
+npm run destroy && npm run cluster:down
+```
+
 ## Grading
 
-hw-26. `package.json` у корені, окремий `cd` не потрібен. API з ДЗ #24 без JWT не стартує, міграції читають `DB_HOST` / `DB_PASSWORD`, пул демо — `DATABASE_URL`, тому блок експортує і їх. Ключі підпису генеруються в `/tmp`, у репозиторій не потрапляють.
+hw-28. Грейдер не має доступу до сховища — значення передає `export`-ом. Локальний файловий бекенд Pulumi обовʼязковий (`PULUMI_BACKEND_URL=file://…`), інакше CLI піде в `pulumi login`. Після збірки образу його треба `kind load` — інакше под зависає в `ErrImagePull`.
+
+```bash
+export SKIP_VAULT=1            # у грейдера немає доступу до сховища
+export APP_DB_PASSWORD=grader-secret
+export PULUMI_CONFIG_PASSPHRASE=hw28-grading
+export PULUMI_BACKEND_URL="file://$PWD/.pulumi"
+
+npm --prefix infra ci
+printf 'dummy-npm-token' > .npm_token   # секрет етапу збірки; у git його немає
+npm run image:build            # docker/Dockerfile -> marketplace-api:hw28
+npm run cluster:up             # kind create + kind load docker-image
+npm run up                     # pulumi up
+
+# критерії / деми
+cd infra && npx tsc --noEmit; echo "exit=$?"
+cd ..
+SCAN_MAX=-1    npm run scan; echo "exit(max=-1)=$?"
+SCAN_MAX=99999 npm run scan; echo "exit(max=99999)=$?"
+npm run demo:image
+npm run demo:rollout
+npm run demo:pdb
+
+npm run destroy && npm run cluster:down
+```
+
+Попередні домашні (hw-26 і раніше):
 
 ```bash
 docker compose up -d --wait
