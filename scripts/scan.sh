@@ -11,18 +11,21 @@ IMAGE="${SCAN_IMAGE:-marketplace-api:hw28}"
 MAX_ALLOWED="${SCAN_MAX:-100}"
 SEVERITY="${SCAN_SEVERITY:-CRITICAL,HIGH}"
 REPORT="$(mktemp -t scan-XXXXXX.json)"
-trap 'rm -f "$REPORT"' EXIT
+SAVE="$(mktemp -t scan-XXXXXX.tar)"
+trap 'rm -f "$REPORT" "$SAVE"' EXIT
 
-if ! command -v trivy >/dev/null 2>&1; then
-  # Prefer a containerized scanner when the host binary is missing.
-  SCAN_CMD=(docker run --rm
-    -v /var/run/docker.sock:/var/run/docker.sock
-    aquasec/trivy:0.76.1)
+# Scan a tar from `docker save` — never mount the host docker.sock into a scanner.
+docker save "$IMAGE" -o "$SAVE"
+
+if command -v trivy >/dev/null 2>&1; then
+  trivy image --quiet --format json --severity "$SEVERITY" --input "$SAVE" >"$REPORT"
 else
-  SCAN_CMD=(trivy)
+  docker run --rm \
+    -v "$SAVE:/tmp/image.tar:ro" \
+    aquasec/trivy:0.76.1 \
+    image --quiet --format json --severity "$SEVERITY" --input /tmp/image.tar \
+    >"$REPORT"
 fi
-
-"${SCAN_CMD[@]}" image --quiet --format json --severity "$SEVERITY" "$IMAGE" >"$REPORT"
 
 # Count findings from the report — the verdict is derived, not printed by fiat.
 FOUND="$(node -e '

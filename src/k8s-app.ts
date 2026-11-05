@@ -28,7 +28,15 @@ let draining = false;
 let server: http.Server | undefined;
 
 function send(res: http.ServerResponse, status: number, body: string): void {
-  res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' });
+  const headers: Record<string, string> = {
+    'content-type': 'text/plain; charset=utf-8',
+  };
+  // During drain, ask clients not to reuse the socket — otherwise close()
+  // tears keep-alive connections mid-flight and the loadgen sees 000.
+  if (draining) {
+    headers.connection = 'close';
+  }
+  res.writeHead(status, headers);
   res.end(body);
 }
 
@@ -89,6 +97,10 @@ async function shutdown(signal: string): Promise<void> {
   if (!current) {
     process.exit(0);
   }
+
+  // Drop idle keep-alives before refusing new accepts — close() alone
+  // resets them and shows up as curl 000 under NodePort load.
+  current.closeIdleConnections();
 
   await new Promise<void>((resolve) => {
     current.close(() => resolve());

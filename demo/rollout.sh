@@ -109,10 +109,6 @@ wait "$LOAD_PID" 2>/dev/null || true
 sleep 0.5
 
 # Count from the file — never hard-code the verdict.
-REQUESTS="$(wc -l <"$RESULTS" | tr -d ' ')"
-OK="$(grep -c '^200$' "$RESULTS" || true)"
-FAILED="$(grep -cuvE '^200$' "$RESULTS" || true)"
-# grep -cuvE returns 1 when zero matches on some platforms with set -e — normalize:
 FAILED="$(awk 'BEGIN{f=0} $0!="200"{f++} END{print f}' "$RESULTS")"
 OK="$(awk 'BEGIN{o=0} $0=="200"{o++} END{print o}' "$RESULTS")"
 REQUESTS="$(awk 'END{print NR}' "$RESULTS")"
