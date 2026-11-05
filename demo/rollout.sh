@@ -29,6 +29,17 @@ for _ in $(seq 1 90); do
   sleep 1
 done
 
+# Quiet the cluster first — leftover Terminating pods from a prior rev still
+# hold keep-alive conntrack entries and show up as failed≠0 under load.
+for _ in $(seq 1 60); do
+  term="$(kubectl -n "$NS" get pods --no-headers 2>/dev/null | grep -c Terminating || true)"
+  not_ready="$(kubectl -n "$NS" get pods --no-headers 2>/dev/null | awk '$2 !~ /^([1-9][0-9]*)\/\1$/ {c++} END{print c+0}')"
+  if [ "${term:-0}" -eq 0 ] && [ "${not_ready:-0}" -eq 0 ]; then
+    break
+  fi
+  sleep 1
+done
+
 # Start load in the background.
 bash "$ROOT/scripts/loadgen.sh" "$URL" "$RESULTS" "$CONCURRENCY" "$CONTROL" &
 LOAD_PID=$!

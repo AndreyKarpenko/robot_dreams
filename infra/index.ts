@@ -24,14 +24,14 @@ const appDbPassword = requireEnv('APP_DB_PASSWORD');
 const cfg = new pulumi.Config();
 const image = cfg.get('image') ?? 'marketplace-api:hw28';
 const replicas = cfg.getNumber('replicas') ?? 2;
-const drainMs = cfg.getNumber('drainMs') ?? 5000;
+const drainMs = cfg.getNumber('drainMs') ?? 8000;
 const warmupMs = cfg.getNumber('warmupMs') ?? 4000;
 const rev = cfg.get('rev') ?? '1';
 const namespaceName = cfg.get('namespace') ?? 'marketplace';
 const appLabels = { app: 'marketplace-api' };
 
 // Grace must exceed preStop sleep + app drain, else SIGKILL mid-drain.
-const preStopSleepSeconds = 8;
+const preStopSleepSeconds = 10;
 const terminationGracePeriodSeconds =
   preStopSleepSeconds + Math.ceil(drainMs / 1000) + 10;
 

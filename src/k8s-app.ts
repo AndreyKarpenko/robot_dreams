@@ -9,7 +9,7 @@ import * as http from 'node:http';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const WARMUP_MS = Number(process.env.WARMUP_MS ?? 4000);
-const DRAIN_MS = Number(process.env.DRAIN_MS ?? 5000);
+const DRAIN_MS = Number(process.env.DRAIN_MS ?? 8000);
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -31,8 +31,9 @@ function send(res: http.ServerResponse, status: number, body: string): void {
   const headers: Record<string, string> = {
     'content-type': 'text/plain; charset=utf-8',
   };
-  // During drain, ask clients not to reuse the socket — otherwise close()
-  // tears keep-alive connections mid-flight and the loadgen sees 000.
+  // Only while draining: ask clients to drop keep-alive so close() does not
+  // RST reused sockets (curl 000). Always-on Connection:close exhausts
+  // ephemeral ports under the loadgen.
   if (draining) {
     headers.connection = 'close';
   }
@@ -91,6 +92,10 @@ async function shutdown(signal: string): Promise<void> {
   draining = true;
   console.log(`${signal}: readiness off, draining ${DRAIN_MS}ms`);
 
+  // Do NOT closeIdleConnections() here: under keep-alive load that RSTs the
+  // next request on an idle socket (curl 000). Connection: close on responses
+  // lets clients retire sockets cleanly during the drain window; we only sweep
+  // leftovers immediately before close().
   await new Promise<void>((resolve) => setTimeout(resolve, DRAIN_MS));
 
   const current = server;
@@ -98,10 +103,7 @@ async function shutdown(signal: string): Promise<void> {
     process.exit(0);
   }
 
-  // Drop idle keep-alives before refusing new accepts — close() alone
-  // resets them and shows up as curl 000 under NodePort load.
   current.closeIdleConnections();
-
   await new Promise<void>((resolve) => {
     current.close(() => resolve());
     const timer = setTimeout(resolve, 2000);
