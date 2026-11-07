@@ -20,6 +20,30 @@ jobs:
       - run: npm run test:e2e
       - run: npm run test:contract
 
+  image-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Build production image
+        run: |
+          printf 'ci-npm-token' > .npm_token
+          npm run image:build
+      - name: Install Trivy
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          VER=0.76.1
+          curl -fsSL \
+            "https://github.com/aquasecurity/trivy/releases/download/v${VER}/trivy_${VER}_Linux-64bit.tar.gz" \
+            | tar -xz -C "$HOME/.local/bin" trivy
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          trivy --version
+      - name: Scan image (computed threshold)
+        run: SCAN_MAX=100 npm run scan
+
   contract:
     runs-on: ubuntu-latest
     timeout-minutes: 30

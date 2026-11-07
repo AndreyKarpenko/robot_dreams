@@ -1,0 +1,18 @@
+# kind cluster for hw-28. Memory ~520–545 MiB on Docker Desktop ≈ 3.8 GiB.
+# Created with: kind create cluster --name hw28 --config k8s/kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: hw28
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: KubeletConfiguration
+        evictionHard:
+          nodefs.available: "0%"
+          imagefs.available: "0%"
+          memory.available: "100Mi"
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        protocol: TCP

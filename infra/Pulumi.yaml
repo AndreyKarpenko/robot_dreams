@@ -1,0 +1,6 @@
+name: marketplace-hw28
+runtime:
+  name: nodejs
+  options:
+    typescript: true
+description: Zero-downtime Kubernetes rollout for the marketplace API (hw-28)
