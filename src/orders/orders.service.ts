@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
   Inject,
   Injectable,
   InternalServerErrorException,
@@ -21,7 +22,10 @@ import {
   saveIdempotencyKey,
 } from '../outbox/idempotency';
 import { isUniqueViolation, type SqlQuery } from '../outbox/rows';
+import { layerLogger } from '../observability/logger';
 import { assertStreamTokenSecret, signStreamToken } from './stream-token';
+
+const log = layerLogger('orders.service');
 
 export type OrderResponse = {
   id: number;
@@ -100,6 +104,7 @@ export class OrdersService {
             throw new NotFoundException();
           }
           await client.query('COMMIT');
+          log.info({ order_id: existingId }, 'idempotent replay');
           return {
             ...toOrderResponse(found.order, found),
             stream_token: signStreamToken(found.order.buyer_id),
@@ -160,6 +165,10 @@ export class OrdersService {
       }
 
       await client.query('COMMIT');
+      log.info(
+        { order_id: order.id, total_cents: total, lines: lines.length },
+        'order placed',
+      );
       return {
         ...toOrderResponse(order, {
           items: lines.map((line) => ({
@@ -172,6 +181,10 @@ export class OrdersService {
       };
     } catch (err) {
       await client.query('ROLLBACK');
+      // Expected outcomes (404 product, 409 replay race) are not incidents.
+      if (!(err instanceof HttpException)) {
+        log.error({ err }, 'checkout rolled back');
+      }
       throw err;
     } finally {
       client.release();

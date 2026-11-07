@@ -4,6 +4,9 @@ import { Global, Inject, Module, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Pool } from 'pg';
 import { Env } from '../config/env.schema';
+import { layerLogger } from '../observability/logger';
+
+const log = layerLogger('db.pool');
 
 export const PG_POOL = 'PG_POOL';
 
@@ -16,8 +19,9 @@ function buildPool(config: ConfigService<Env, true>): Pool {
   if (databaseUrl) {
     const pool = new Pool({ connectionString: databaseUrl, max: 3 });
     pool.on('error', (err) => {
-      console.error(
-        `pg pool closed an idle client (${err.message}) — a new connection will be opened`,
+      log.warn(
+        { err },
+        'pg pool closed an idle client; a new connection will be opened',
       );
     });
     return pool;
@@ -35,8 +39,9 @@ function buildPool(config: ConfigService<Env, true>): Pool {
 
   // pg_terminate_backend emits 'error' on idle clients; without this, Node exits.
   pool.on('error', (err) => {
-    console.error(
-      `pg pool closed an idle client (${err.message}) — a new connection will be opened`,
+    log.warn(
+      { err },
+      'pg pool closed an idle client; a new connection will be opened',
     );
   });
 

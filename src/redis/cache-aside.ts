@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type Redis from 'ioredis';
+import { layerLogger } from '../observability/logger';
+
+const log = layerLogger('cache');
 
 const UNLOCK_IF_MINE = `
 if redis.call("get", KEYS[1]) == ARGV[1] then
@@ -19,18 +22,14 @@ function sleep(ms: number): Promise<void> {
 }
 
 type Cached<T> =
-  | { state: 'hit'; value: T }
-  | { state: 'miss' }
-  | { state: 'down' };
+  { state: 'hit'; value: T } | { state: 'miss' } | { state: 'down' };
 
 async function readCache<T>(redis: Redis, key: string): Promise<Cached<T>> {
   let raw: string | null;
   try {
     raw = await redis.get(key);
   } catch (err) {
-    console.error(
-      `cache read failed for ${key}: ${(err as Error).message}`,
-    );
+    log.warn({ err, key }, 'cache read failed');
     return { state: 'down' };
   }
   if (raw === null) return { state: 'miss' };
@@ -50,19 +49,19 @@ async function writeCache(
     await redis.set(key, JSON.stringify(value), 'EX', jitteredTtlSeconds());
   } catch (err) {
     // A cache that throws takes the request down with it. The DB value is enough.
-    console.error(
-      `cache write failed for ${key}: ${(err as Error).message}`,
-    );
+    log.warn({ err, key }, 'cache write failed');
   }
 }
 
-async function unlock(redis: Redis, lockKey: string, token: string): Promise<void> {
+async function unlock(
+  redis: Redis,
+  lockKey: string,
+  token: string,
+): Promise<void> {
   try {
     await redis.eval(UNLOCK_IF_MINE, 1, lockKey, token);
   } catch (err) {
-    console.error(
-      `cache unlock failed for ${lockKey}: ${(err as Error).message}`,
-    );
+    log.warn({ err, key: lockKey }, 'cache unlock failed');
   }
 }
 
@@ -99,9 +98,7 @@ export async function cacheAside<T>(
   try {
     acquired = await redis.set(lockKey, token, 'PX', lockTtlMs, 'NX');
   } catch (err) {
-    console.error(
-      `cache lock failed for ${key}: ${(err as Error).message}`,
-    );
+    log.warn({ err, key }, 'cache lock failed');
     return load();
   }
   if (acquired === 'OK') return fill();

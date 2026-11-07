@@ -2,6 +2,9 @@ import type { ConfirmChannel, Message } from 'amqplib';
 import { brokerConfigured, getBrokerConnection } from './connection';
 import type { OrderPlacedEvent } from './order-placed';
 import { EVENTS_EXCHANGE, ROUTING_KEY } from './topology';
+import { layerLogger } from '../observability/logger';
+
+const log = layerLogger('broker');
 
 /**
  * Publish order.placed on one confirm channel for this process.
@@ -57,7 +60,7 @@ async function openConfirmChannel(gen: number): Promise<ConfirmChannel> {
   const connection = await getBrokerConnection();
   const channel = await connection.createConfirmChannel();
   channel.on('error', (err: Error) => {
-    console.error(`confirm channel: ${err.message}`);
+    log.error({ err }, 'confirm channel error');
     dropSlot(gen);
   });
   channel.on('close', () => {

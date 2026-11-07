@@ -17,6 +17,7 @@ import type { Request, Response } from 'express';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { AccessClaims } from '../auth/jwt';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { layerLogger } from '../observability/logger';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { checkOrderOwner, OrderAccess } from './order-access';
@@ -24,6 +25,8 @@ import { OrderEventsService, OrderStatusEvent } from './order-events.service';
 import { OrdersRepository } from './orders.repository';
 import { OrdersService } from './orders.service';
 import { verifyStreamToken } from './stream-token';
+
+const log = layerLogger('orders.controller');
 
 @Controller('orders')
 export class OrdersController {
@@ -44,6 +47,7 @@ export class OrdersController {
     const key = Array.isArray(idempotencyKey)
       ? idempotencyKey[0]
       : idempotencyKey;
+    log.info({ lines: createOrderDto.items.length }, 'checkout requested');
     return this.ordersService.create(createOrderDto, user.userId, key);
   }
 
@@ -105,8 +109,9 @@ export class OrdersController {
       if (!res.writableEnded) {
         res.end();
       }
-      console.error(
-        err instanceof Error ? err.message : 'order event stream failed',
+      log.error(
+        err instanceof Error ? { err } : { detail: String(err) },
+        'order event stream failed',
       );
     }
     if (closed) {
@@ -130,6 +135,7 @@ export class OrdersController {
     @CurrentUser() user: AccessClaims,
     @Param('id', ParseIntPipe) id: number,
   ) {
+    log.debug({ order_id: id }, 'order requested');
     return this.ordersService.findOne(id, user.userId);
   }
 }

@@ -1,4 +1,7 @@
 import type { Channel, ChannelModel, Message } from 'amqplib';
+import { layerLogger } from '../observability/logger';
+
+const log = layerLogger('broker');
 
 /** Topic exchange for domain events. The producer publishes here and does not declare queues. */
 export const EVENTS_EXCHANGE = 'shop.events';
@@ -25,7 +28,7 @@ export const PREFETCH = 10;
 export async function declareTopology(connection: ChannelModel): Promise<void> {
   const channel = await connection.createChannel();
   channel.on('error', (err: Error) => {
-    console.error(`topology channel: ${err.message}`);
+    log.error({ err }, 'topology channel error');
   });
   try {
     await channel.assertExchange(DEAD_LETTER_EXCHANGE, 'direct', {
@@ -164,7 +167,7 @@ async function deleteQuiet(
   const channel = await connection.createChannel();
   channel.on('error', (err: Error) => {
     if (!/NOT_FOUND/.test(err.message)) {
-      console.error(`broker delete: ${err.message}`);
+      log.error({ err }, 'broker delete error');
     }
   });
   try {

@@ -1,0 +1,16 @@
+global:
+  # Short on purpose: the demos and rate(...[1m]) need several samples a minute.
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: marketplace-api
+    static_configs:
+      # demo:logs / demo:metrics / demo:trace boot the API here.
+      - targets: ['host.docker.internal:22910']
+        labels:
+          env: demo
+      # npm run start:vault
+      - targets: ['host.docker.internal:3000']
+        labels:
+          env: dev

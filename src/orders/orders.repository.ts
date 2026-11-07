@@ -1,4 +1,7 @@
 import type { Queryable } from '../db/queryable';
+import { layerLogger } from '../observability/logger';
+
+const log = layerLogger('orders.repo');
 
 export type OrderRow = {
   id: string;
@@ -43,6 +46,7 @@ export class OrdersRepository {
        RETURNING id, status, total, buyer_id, created_at`,
       [input.status, input.total, input.buyerId],
     );
+    log.debug({ order_id: result.rows[0].id }, 'order row inserted');
     return result.rows[0];
   }
 
@@ -56,6 +60,10 @@ export class OrdersRepository {
       `INSERT INTO order_items (quantity, unit_price, order_id, product_id)
        VALUES ($1, $2, $3, $4)`,
       [input.quantity, input.unitPrice, input.orderId, input.productId],
+    );
+    log.debug(
+      { order_id: input.orderId, product_id: input.productId },
+      'order item inserted',
     );
   }
 
@@ -139,6 +147,10 @@ export class OrdersRepository {
         WHERE o.id = $1
         ORDER BY oi.id`,
       [id],
+    );
+    log.debug(
+      { order_id: String(id), rows: result.rows.length },
+      'order loaded',
     );
     if (result.rows.length === 0) {
       return null;
