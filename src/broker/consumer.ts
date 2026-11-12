@@ -3,6 +3,9 @@ import { getBrokerConnection } from './connection';
 import { EffectStore } from './effect-store';
 import { parseOrderPlaced } from './order-placed';
 import { PREFETCH, WORK_QUEUE } from './topology';
+import { layerLogger } from '../observability/logger';
+
+const log = layerLogger('broker');
 
 export type ConsumerStats = {
   delivered: number;
@@ -56,7 +59,7 @@ async function consume(
   const connection = await getBrokerConnection();
   const channel = await connection.createChannel();
   channel.on('error', (err: Error) => {
-    console.error(`order.placed consumer: ${err.message}`);
+    log.error({ err }, 'order.placed consumer channel error');
   });
   await channel.prefetch(PREFETCH);
 

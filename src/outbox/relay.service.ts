@@ -9,6 +9,9 @@ import { Pool } from 'pg';
 import type { Env } from '../config/env.schema';
 import { PG_POOL } from '../db/database.module';
 import { relayOutboxPool } from './relay';
+import { layerLogger } from '../observability/logger';
+
+const log = layerLogger('outbox.relay');
 
 const POLL_MS = 500;
 
@@ -52,8 +55,10 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
     try {
       await relayOutboxPool(this.pool);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`outbox relay: ${message}`);
+      log.error(
+        err instanceof Error ? { err } : { detail: String(err) },
+        'outbox relay failed',
+      );
     } finally {
       this.running = false;
     }

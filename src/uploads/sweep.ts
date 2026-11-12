@@ -2,6 +2,9 @@ import { DeleteObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { Queue, Worker } from 'bullmq';
 import type { Pool } from 'pg';
 import { abortIfAny } from '../storage/bucket';
+import { layerLogger } from '../observability/logger';
+
+const log = layerLogger('uploads.sweep');
 
 export const UPLOAD_SWEEP_QUEUE = 'hw26-upload-sweep';
 const STALE_AFTER = `interval '1 day'`;
@@ -64,7 +67,7 @@ export async function startUploadSweep(
     { connection: { url: redisUrl, maxRetriesPerRequest: null } },
   );
   worker.on('error', (err) => {
-    console.error(`upload sweep: ${err.message}`);
+    log.error({ err }, 'upload sweep error');
   });
   return {
     close: async () => {

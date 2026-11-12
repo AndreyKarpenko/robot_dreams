@@ -1,0 +1,64 @@
+# hw-29 observability stand: Prometheus + Grafana + Jaeger (traces).
+# Ports live in 22900-22999 so they do not collide with earlier stands.
+# Grafana credentials come from the secrets store (hw-11) or the grader's export:
+#   bash scripts/with-secrets.sh dev docker compose -f observability/compose.yaml up -d --wait
+name: hw29-observability
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=6h
+    ports:
+      - '22901:9090'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    # The API runs on the host, not in this network. Docker Desktop resolves
+    # host.docker.internal by itself; Linux needs the host-gateway entry.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:9090/-/ready']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # In-memory storage: a restart drops traces, which is what a demo stand wants.
+  jaeger:
+    image: jaegertracing/jaeger:2.10.0
+    ports:
+      - '22918:4318' # OTLP/HTTP in
+      - '22904:16686' # UI + query API
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:16686/']
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    ports:
+      - '22900:3000'
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?GRAFANA_ADMIN_USER comes from the vault or an export}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD comes from the vault or an export}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_AUTH_ANONYMOUS_ENABLED: 'false'
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
+      # Grafana 12 downloads plugins on start; the stand must boot offline.
+      GF_PLUGINS_PREINSTALL_DISABLED: 'true'
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:3000/api/health']
+      interval: 2s
+      timeout: 2s
+      retries: 60

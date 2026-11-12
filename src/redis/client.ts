@@ -1,4 +1,7 @@
 import Redis from 'ioredis';
+import { layerLogger } from '../observability/logger';
+
+const log = layerLogger('redis');
 
 export function openRedis(
   url: string,
@@ -17,7 +20,7 @@ export function openRedis(
     },
   });
   client.on('error', (err: Error) => {
-    console.error(`redis ${role}: ${err.message}`);
+    log.error({ err, role }, 'redis client error');
   });
   return client;
 }

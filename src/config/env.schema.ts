@@ -42,6 +42,12 @@ export const envSchema = z.object({
       .optional(),
   ),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  // Read by the OTLP exporter itself; validated here so a typo fails boot.
+  // Empty means spans are created (trace_id in logs) but not exported.
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.preprocess(
+    blankToUndefined,
+    z.url({ protocol: /^https?$/ }).optional(),
+  ),
   TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
   // No defaults: a fallback here would be a signing key baked into the code.
   JWT_KID: z.string().trim().min(1),

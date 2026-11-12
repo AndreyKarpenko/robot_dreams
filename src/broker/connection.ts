@@ -1,4 +1,7 @@
 import amqp, { type ChannelModel } from 'amqplib';
+import { layerLogger } from '../observability/logger';
+
+const log = layerLogger('broker');
 
 let pending: Promise<ChannelModel> | null = null;
 
@@ -25,7 +28,7 @@ export async function getBrokerConnection(): Promise<ChannelModel> {
         pending = null;
       };
       connection.on('error', (err: Error) => {
-        console.error(`broker connection: ${err.message}`);
+        log.error({ err }, 'broker connection error');
         drop();
       });
       connection.on('close', drop);

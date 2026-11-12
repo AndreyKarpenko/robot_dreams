@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { requestContext } from '../observability/request-context';
 import { AuthService } from './auth.service';
 import type { AccessClaims } from './jwt';
 
@@ -18,11 +19,14 @@ export class JwtAuthGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<AuthedRequest>();
     const header = req.headers.authorization;
     const match =
-      typeof header === 'string' ? /^Bearer\s+(\S+)$/i.exec(header.trim()) : null;
+      typeof header === 'string'
+        ? /^Bearer\s+(\S+)$/i.exec(header.trim())
+        : null;
     if (!match) {
       throw new UnauthorizedException();
     }
     req.user = await this.auth.authenticate(match[1]);
+    requestContext.assign({ userId: req.user.userId });
     return true;
   }
 }

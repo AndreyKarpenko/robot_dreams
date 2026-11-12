@@ -14,6 +14,9 @@ import { startOrderPlacedConsumer } from './consumer';
 import { EffectStore } from './effect-store';
 import { OutboxRelay } from '../outbox/relay.service';
 import { declareTopology } from './topology';
+import { layerLogger } from '../observability/logger';
+
+const log = layerLogger('broker');
 
 /**
  * Declares topology and consumes shop.orders.placed for the life of the API.
@@ -64,8 +67,10 @@ export class BrokerBootstrap implements OnModuleInit, OnModuleDestroy {
         if (!this.ready || this.stopping) {
           return;
         }
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`order.placed consumer: ${message}`);
+        log.error(
+          err instanceof Error ? { err } : { detail: String(err) },
+          'order.placed consumer failed',
+        );
       });
     } catch (err) {
       this.stopping = true;

@@ -1,4 +1,13 @@
-import { Queue, Worker, type Job, type JobsOptions, type Processor } from 'bullmq';
+import {
+  Queue,
+  Worker,
+  type Job,
+  type JobsOptions,
+  type Processor,
+} from 'bullmq';
+import { layerLogger } from '../observability/logger';
+
+const log = layerLogger('rating.worker');
 
 export const RATING_QUEUE = 'hw23-ratings';
 export const RATING_SCHEDULER = 'refresh-hot-cards';
@@ -32,11 +41,7 @@ export async function enqueueRatingRecalc(
   queue: Queue,
   productId: string,
 ): Promise<void> {
-  await queue.add(
-    'recalc-rating',
-    { productId },
-    recalcJobOptions(productId),
-  );
+  await queue.add('recalc-rating', { productId }, recalcJobOptions(productId));
 }
 
 /** Upsert, not add: a second boot updates the same scheduler instead of cloning it. */
@@ -55,16 +60,13 @@ export async function ensureRatingScheduler(
   );
 }
 
-export function startRatingWorker(
-  url: string,
-  processor: Processor,
-): Worker {
+export function startRatingWorker(url: string, processor: Processor): Worker {
   const worker = new Worker(RATING_QUEUE, processor, {
     connection: ratingConnection(url, 'worker'),
     concurrency: 4,
   });
   worker.on('error', (err: Error) => {
-    console.error(`rating worker: ${err.message}`);
+    log.error({ err }, 'rating worker error');
   });
   return worker;
 }

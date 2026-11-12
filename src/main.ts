@@ -1,3 +1,5 @@
+// Must stay the first import: instrumentations patch modules as they load.
+import './observability/otel';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { loadEnvFile } from 'node:process';
@@ -5,6 +7,10 @@ import type Redis from 'ioredis';
 import { AppModule } from './app.module';
 import { Env, validate } from './config/env.schema';
 import { configureApp } from './configure-app';
+import { observeHttp } from './observability/http';
+import { layerLogger } from './observability/logger';
+import { metricsHandler } from './observability/metrics';
+import { PinoNestLogger } from './observability/nest-logger';
 import { rateLimitMiddleware, sessionMiddleware } from './redis/http';
 import { STATE_REDIS } from './redis/redis.module';
 
@@ -28,7 +34,12 @@ async function bootstrap() {
   // Name a missing signing key before the pool exists. A DB error here would
   // hide the variable the process actually lacks.
   validate(process.env);
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    logger: new PinoNestLogger(),
+  });
+  // Before Nest's body parsers: a request rejected by a parser still counts.
+  app.use(observeHttp);
+  app.use('/metrics', metricsHandler);
   configureApp(app);
   const state = app.get<Redis | null>(STATE_REDIS);
   if (state) {
@@ -41,6 +52,9 @@ async function bootstrap() {
 }
 
 bootstrap().catch((err: unknown) => {
-  console.error(err instanceof Error ? err.message : err);
+  layerLogger('bootstrap').fatal(
+    err instanceof Error ? { err } : { detail: String(err) },
+    'boot failed',
+  );
   process.exit(1);
 });
