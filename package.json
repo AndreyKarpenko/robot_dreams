@@ -66,7 +66,18 @@
     "test:integration": "jest --config jest.integration.config.js --runInBand",
     "test:e2e": "jest --config jest.e2e.config.js --runInBand",
     "test:contract": "jest --config jest.contract.config.js --runInBand",
-    "verify:provider": "jest --config jest.provider.config.js --runInBand"
+    "verify:provider": "jest --config jest.provider.config.js --runInBand",
+    "up:base": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh up:base",
+    "up:demo": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh up:demo",
+    "destroy:demo": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh destroy:demo",
+    "destroy:base": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh destroy:base",
+    "demo:failover": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh demo:failover",
+    "demo:nat": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh demo:nat",
+    "demo:alb": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh demo:alb",
+    "hw31:verify": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh verify",
+    "hw31:teardown": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh teardown",
+    "hw31:iam": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh iam",
+    "hw31:start": "bash scripts/with-secrets.sh dev bash scripts/hw31.sh start"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1158.0",

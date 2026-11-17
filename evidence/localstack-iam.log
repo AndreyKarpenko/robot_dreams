@@ -1,0 +1,8 @@
+localstack-1  | 2026-11-17T20:14:22.153  INFO --- [et.reactor-2] localstack.request.aws     : AWS iam.ListRolePolicies => 200
+localstack-1  | 2026-11-17T20:14:22.540  INFO --- [et.reactor-1] localstack.request.aws     : AWS iam.GetRolePolicy => 200
+localstack-1  | 2026-11-17T20:14:23.093  INFO --- [et.reactor-4] localstack.request.aws     : AWS iam.CreateUser => 200
+localstack-1  | 2026-11-17T20:14:23.461  INFO --- [et.reactor-0] localstack.request.aws     : AWS iam.PutUserPolicy => 200
+localstack-1  | 2026-11-17T20:14:23.838  INFO --- [et.reactor-3] localstack.request.aws     : AWS iam.CreateAccessKey => 200
+localstack-1  | 2026-11-17T20:14:24.231  INFO --- [et.reactor-5] localstack.request.aws     : AWS s3.CreateBucket => 200
+localstack-1  | 2026-11-17T20:14:24.615  INFO --- [et.reactor-2] localstack.request.aws     : AWS s3.PutObject => 200
+localstack-1  | 2026-11-17T20:14:25.007  INFO --- [et.reactor-1] localstack.request.aws     : AWS s3.GetObject => 200

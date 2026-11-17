@@ -1,0 +1,88 @@
+{
+  "Role": {
+    "Path": "/",
+    "RoleName": "teardown-07fe23b",
+    "RoleId": "AROAQAAAAAAAHTWVI6ROX",
+    "Arn": "arn:aws:iam::000000000000:role/teardown-07fe23b",
+    "CreateDate": "2026-11-17T20:10:15.601015Z",
+    "AssumeRolePolicyDocument": {
+      "Statement": [
+        {
+          "Action": "sts:AssumeRoleWithWebIdentity",
+          "Condition": {
+            "StringEquals": {
+              "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+            },
+            "StringLike": {
+              "token.actions.githubusercontent.com:sub": "repo:AndreyKarpenko/robot_dreams:ref:refs/heads/hw-31"
+            }
+          },
+          "Effect": "Allow",
+          "Principal": {
+            "Federated": "arn:aws:iam::000000000000:oidc-provider/token.actions.githubusercontent.com"
+          }
+        }
+      ],
+      "Version": "2012-10-17"
+    },
+    "MaxSessionDuration": 3600,
+    "Tags": [
+      {
+        "Key": "Stack",
+        "Value": "base"
+      },
+      {
+        "Key": "ManagedBy",
+        "Value": "pulumi"
+      },
+      {
+        "Key": "Project",
+        "Value": "nodejs-pro-hw31"
+      }
+    ],
+    "RoleLastUsed": {}
+  },
+  "PermissionPolicies": [
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Action": [
+            "ec2:DescribeVpcs",
+            "ec2:DescribeSubnets",
+            "ec2:DescribeRouteTables",
+            "ec2:DescribeSecurityGroups",
+            "ec2:DescribeNatGateways",
+            "ec2:DescribeAddresses",
+            "rds:DescribeDBInstances",
+            "elasticloadbalancing:DescribeLoadBalancers",
+            "tag:GetResources"
+          ],
+          "Effect": "Allow",
+          "Resource": "*"
+        },
+        {
+          "Action": [
+            "rds:DeleteDBInstance",
+            "rds:DeleteDBSubnetGroup",
+            "elasticloadbalancing:DeleteLoadBalancer",
+            "elasticloadbalancing:DeleteListener",
+            "elasticloadbalancing:DeleteTargetGroup",
+            "elasticloadbalancing:DeregisterTargets",
+            "ec2:DeleteNatGateway",
+            "ec2:ReleaseAddress",
+            "lambda:DeleteFunction",
+            "lambda:RemovePermission"
+          ],
+          "Condition": {
+            "StringEquals": {
+              "aws:ResourceTag/Project": "nodejs-pro-hw31"
+            }
+          },
+          "Effect": "Allow",
+          "Resource": "*"
+        }
+      ]
+    }
+  ]
+}

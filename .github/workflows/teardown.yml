@@ -1,0 +1,55 @@
+name: HW31 LocalStack teardown
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: hw31-localstack-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  localstack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SKIP_VAULT: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: pulumi/setup-pulumi@v2
+        with:
+          pulumi-version: '3.273.0'
+      - name: Install and typecheck both programs
+        run: |
+          for d in infra/base infra/demo; do
+            npm ci --prefix "$d"
+            (cd "$d" && npx tsc --noEmit)
+          done
+      - name: Start pinned emulator
+        run: npm run hw31:start
+      - name: Create base and collect evidence
+        run: |
+          npm run up:base
+          npm run hw31:verify
+          npm run hw31:iam
+      - name: Preview and capture real license rejection
+        run: |
+          npm run demo:nat
+      - name: Destroy then export then check both regions
+        if: always()
+        run: |
+          # hw31.sh executes pulumi destroy for demo and base before exporting and checking.
+          npm run hw31:teardown
+      - name: Upload evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hw31-evidence
+          path: evidence/
+      - name: Stop emulator
+        if: always()
+        run: docker compose -f infra/hw31/compose.yaml down -v
