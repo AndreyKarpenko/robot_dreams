@@ -602,7 +602,7 @@ Branch protection захищає злиття, environment protection — дос
 
 Кожен зовнішній `uses` зафіксований SHA із коментарем версії, спільна підготовка
 винесена в `.github/actions/pipeline`. `id-token: write` є лише в deploy job.
-Для PR із fork видача секрету сховища недоступна: здача — з гілки цього репозиторію.
+Для PR із fork секрети Actions недоступні: здача — з гілки цього репозиторію.
 Перед здачею зробіть GHCR package `ghcr.io/andreykarpenko/robot_dreams` **public**
 (Package settings → Change visibility). Публічність потрібна і kind node, і грейдеру.
 Образ отримує тег `github.sha`; PR evidence окремо містить справжній
@@ -612,21 +612,29 @@ manifest без додаткового index можна було прямо за
 
 ### Секрети конвеєра
 
+CI отримує секрети безпосередньо з GitHub Actions Secrets. Infisical для
+конвеєра не потрібен. Це свідоме відхилення від вимоги ДЗ #32 про окреме
+сховище #11; решта гейтів та спосіб передачі секрету в Kubernetes збережені.
+
+У Settings → Secrets and variables → Actions → New repository secret додайте:
+
 | Ім’я | Призначення |
 | --- | --- |
-| `INFISICAL_TOKEN` | Єдиний власноруч створений GitHub secret: read-only доступ до сховища #11, dev environment, лише потрібні застосунку змінні; не відкриває хмару чи реєстр |
-| `GITHUB_TOKEN` | Автоматичний короткоживучий токен GitHub: packages:write лише build, packages:read deploy; actions:write лише dispatcher |
+| `APP_DB_PASSWORD` | Пароль БД; можна перенести значення локального `secrets/db_password` |
+| `PULUMI_CONFIG_PASSPHRASE` | Окрема випадкова passphrase для шифрування файлового стану Pulumi |
+| `GITHUB_TOKEN` | Видається GitHub автоматично: packages:write лише build, packages:read deploy; actions:write лише dispatcher |
 
-Repository variable `INFISICAL_PROJECT_ID` — несекретний ID проєкту Infisical.
-Обгортка `scripts/with-secrets.sh` підтримує `INFISICAL_TOKEN` з оточення CI,
-локально використовує наявний `.secrets/infisical.env`; нових env-файлів немає.
-Видайте машинному доступу мінімальні права читання dev. Жодних довгоживучих
-ключів хмари чи окремих паролів реєстру у GitHub Secrets немає.
+Обидва власні секрети доступні лише кроку деплою через `env`, а не всій job.
+У цьому кроці `SKIP_VAULT=1` дозволяє наявній `scripts/with-secrets.sh`
+передати вже налаштоване оточення команді. `INFISICAL_TOKEN` та
+`INFISICAL_PROJECT_ID` більше не потрібні. Локальні файли `secrets/` і
+`.secrets/` залишаються поза Git; нових env-файлів немає. Довгоживучих ключів
+хмари чи окремих паролів реєстру у GitHub Secrets немає.
 
-| Змінна | Джерело | Використання |
+| Змінна | Джерело у CI | Використання |
 | --- | --- | --- |
-| `APP_DB_PASSWORD` | сховище #11 | Pulumi Secret.data → Deployment.env[].valueFrom.secretKeyRef |
-| `PULUMI_CONFIG_PASSPHRASE` | сховище #11 | Шифрування файлового стану Pulumi |
+| `APP_DB_PASSWORD` | GitHub Actions Secrets | Pulumi Secret.data → Deployment.env[].valueFrom.secretKeyRef |
+| `PULUMI_CONFIG_PASSPHRASE` | GitHub Actions Secrets | Шифрування файлового стану Pulumi |
 
 Секрет застосунку не надходить у build job. Обидва preview використовують
 несекретний placeholder; реальне значення потрібне лише `pulumi up` і rollout,

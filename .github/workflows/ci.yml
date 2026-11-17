@@ -143,8 +143,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Deploy through Pulumi and enforce zero failed responses
         env:
-          INFISICAL_TOKEN: ${{ secrets.INFISICAL_TOKEN }}
-          INFISICAL_PROJECT_ID: ${{ vars.INFISICAL_PROJECT_ID }}
+          SKIP_VAULT: '1'
+          APP_DB_PASSWORD: ${{ secrets.APP_DB_PASSWORD }}
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
         run: bash scripts/with-secrets.sh dev bash scripts/ci-deploy.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()

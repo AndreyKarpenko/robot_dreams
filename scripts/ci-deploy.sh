@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-: "${APP_DB_PASSWORD:?APP_DB_PASSWORD must come from the secrets store}"
-: "${PULUMI_CONFIG_PASSPHRASE:?PULUMI_CONFIG_PASSPHRASE must come from the secrets store}"
+: "${APP_DB_PASSWORD:?APP_DB_PASSWORD must be configured in GitHub Actions Secrets}"
+: "${PULUMI_CONFIG_PASSPHRASE:?PULUMI_CONFIG_PASSPHRASE must be configured in GitHub Actions Secrets}"
 ROOT="$PWD"
 export PULUMI_BACKEND_URL="file://$ROOT/.pulumi"
 export SCAN_IMAGE="$IMAGE_REPOSITORY@$BUILT_DIGEST"

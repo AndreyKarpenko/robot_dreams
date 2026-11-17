@@ -2,7 +2,7 @@ name: Project toolchain
 description: Install locked Node dependencies and infrastructure tools
 inputs:
   infrastructure:
-    description: Install kind, Pulumi and Infisical for the deployment job
+    description: Install kind and Pulumi for the deployment job
     default: 'false'
 runs:
   using: composite
@@ -26,5 +26,3 @@ runs:
         curl -fsSL https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64.sha256sum -o /tmp/kind.sha256
         (cd .bin; sed 's/kind-linux-amd64/kind/' /tmp/kind.sha256 | sha256sum -c -)
         chmod +x .bin/kind
-        npm install --prefix /tmp/infisical-cli @infisical/cli@0.41.1
-        echo /tmp/infisical-cli/node_modules/.bin >> "$GITHUB_PATH"
