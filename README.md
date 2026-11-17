@@ -570,7 +570,151 @@ span-status-error=1
 
 `tsconfig.build.json` тепер виключає `infra/` і `demo/`. Після ДЗ #28 `infra/index.ts` потрапляв у `nest build`, і `rootDir` зсувався: збірка клала файли в `dist/src/…`, а скрипти шукали `dist/main.js`.
 
+## CI/CD
+
+ДЗ #32: без хмарного акаунта, GitHub-hosted Ubuntu + один ефемерний kind `hw28`.
+Деплой завжди в GitHub environment `ci-kind`, namespace `marketplace`. Кластер
+видаляється після прогону. Застосунок і Pulumi-ресурси з ДЗ #28 збережені.
+
+```mermaid
+flowchart LR
+  PR[pull_request] --> Q[quality: types + lint + OpenAPI + architecture + OIDC demo]
+  Q --> B[build once: GHCR digest + scan + demo:gates]
+  B --> D[deploy: OIDC signature and policy]
+  D --> P[base and head pulumi preview + cost delta gate]
+  P --> U[pulumi up using build job digest]
+  U --> R[demo:rollout: failed = 0]
+  R --> E[pipeline-evidence]
+  M[push main / manual Deploy main] --> W[dispatch same pipeline on main]
+  W --> Q
+```
+
+`.github/workflows/ci.yml` обробляє кожен PR і ручний запуск повного конвеєра.
+`.github/workflows/deploy.yml` на push у main або workflow_dispatch запускає
+цей самий конвеєр на main через GitHub API, чекає результат і повертає його код виходу. Так є рівно одне місце збірки
+в усьому наборі workflow; деплой після merge проходить ті самі гейти.
+Для ручного повтору конкретної версії запускайте **PR gates and promotion**
+на відповідній гілці. Для merge налаштуйте branch protection із required check
+`deploy` (цей check залежить від quality і build). Сам YAML не вмикає branch
+protection. Environment `ci-kind` має дозволяти гілку `hw-32` і `main`.
+Branch protection захищає злиття, environment protection — доступ до середовища.
+Для автоматичного навчального PR environment не потребує ручного reviewer.
+
+Кожен зовнішній `uses` зафіксований SHA із коментарем версії, спільна підготовка
+винесена в `.github/actions/pipeline`. `id-token: write` є лише в deploy job.
+Для PR із fork видача секрету сховища недоступна: здача — з гілки цього репозиторію.
+Перед здачею зробіть GHCR package `ghcr.io/andreykarpenko/robot_dreams` **public**
+(Package settings → Change visibility). Публічність потрібна і kind node, і грейдеру.
+Образ отримує тег `github.sha`; PR evidence окремо містить справжній
+`github.event.pull_request.head.sha`. Деплой використовує тільки output
+`needs.build.outputs.digest`, а не тег. Provenance вимкнено, щоб один amd64
+manifest без додаткового index можна було прямо завантажити в kind.
+
+### Секрети конвеєра
+
+| Ім’я | Призначення |
+| --- | --- |
+| `INFISICAL_TOKEN` | Єдиний власноруч створений GitHub secret: read-only доступ до сховища #11, dev environment, лише потрібні застосунку змінні; не відкриває хмару чи реєстр |
+| `GITHUB_TOKEN` | Автоматичний короткоживучий токен GitHub: packages:write лише build, packages:read deploy; actions:write лише dispatcher |
+
+Repository variable `INFISICAL_PROJECT_ID` — несекретний ID проєкту Infisical.
+Обгортка `scripts/with-secrets.sh` підтримує `INFISICAL_TOKEN` з оточення CI,
+локально використовує наявний `.secrets/infisical.env`; нових env-файлів немає.
+Видайте машинному доступу мінімальні права читання dev. Жодних довгоживучих
+ключів хмари чи окремих паролів реєстру у GitHub Secrets немає.
+
+| Змінна | Джерело | Використання |
+| --- | --- | --- |
+| `APP_DB_PASSWORD` | сховище #11 | Pulumi Secret.data → Deployment.env[].valueFrom.secretKeyRef |
+| `PULUMI_CONFIG_PASSPHRASE` | сховище #11 | Шифрування файлового стану Pulumi |
+
+Секрет застосунку не надходить у build job. Обидва preview використовують
+несекретний placeholder; реальне значення потрібне лише `pulumi up` і rollout,
+через ту саму обгортку. Поле Secret.data позначено `pulumi.secret`, тому Pulumi
+не друкує його навіть у preview. Стан залишається в локальному файловому backend
+раннера і не входить до артефакту. Deployment містить лише посилання на Secret;
+раннер рахує входження справжнього значення в deployment.json без його друку.
+
+Межа маскування: GitHub приховує точні збіги зареєстрованих секретів у логах,
+але не гарантує приховування base64, фрагментів, перетворень чи виводу сторонніх
+інструментів. Тому секрети не друкуються взагалі: немає дампів оточення,
+трасування shell чи виводу токена OIDC. JWT живе лише в пам’яті процесу;
+артефакт містить тільки перевірені iss/aud/sub. Шосте місце витоку з #11,
+логи конвеєра, закривається відсутністю виводу, а не покладанням на маскування.
+
+### OIDC і гейти
+
+Trust policy: [oidc/policy.json](oidc/policy.json). Issuer — GitHub Actions,
+audience — `robot-dreams-deploy`, sub — лише цей репозиторій і environment
+`ci-kind`. Дозволені точні форми sub зі старим іменуванням та з ID власника
+25724770 / репозиторію 1320081397. Гейт завантажує discovery і JWKS, перевіряє
+RS256, kid, iss/aud/sub, exp/iat/nbf. Вивід успішного CI показує використану форму.
+Без хмари цей гейт є умовою допуску до локального kind. AWS/STС не потрібні.
+`demo:oidc` створює тимчасову RSA-пару і localhost discovery/JWKS; усі три
+випадки викликають ту саму функцію, що й CI. Параметри production gate:
+`OIDC_POLICY`, `OIDC_DISCOVERY_URL`, опційно `OIDC_TOKEN_FILE` для зовнішнього
+токена (ніколи не комітити). Без TOKEN_FILE токен запитується через GitHub API.
+
+`gate:types` — tsc --noEmit і ESLint без --fix. `gate:contract` — oasdiff breaking
+проти OpenAPI голови базової гілки PR; локально — `openapi/baseline.yaml`.
+`gate:architecture` — dependency-cruiser: orders/products/users не імпортують
+внутрішні файли одне одного, публічні index.ts дозволені. `scan` — незмінний
+сканер #28 з обчисленням кількості HIGH/CRITICAL і порога SCAN_MAX.
+`demo:gates` генерує тимчасові зламані входи, запускає кожен реальний інструмент
+двічі та завершується помилкою, якщо хоч одна пара дає неочікуваний результат.
+Для scan локально потрібен Docker; за відсутності локального образу демо
+виконає `image:build`. У CI передається вже зібраний digest, повторної збірки немає.
+
+`demo:rollout` залишено з порогом ДЗ #28: ≥5000 відповідей (вище мінімальних
+2000 з цього завдання), failed=0. Лічильники походять із файла HTTP-кодів;
+нова ревізія створюється через Pulumi. Артефакт `pipeline-evidence` завжди
+вивантажується окремою фінальною evidence job, навіть при помилці: evidence.txt, deployment.json,
+plan.json, rollout.txt, build.log; також base-plan.json для перевірки delta.
+На ранній помилці файли, до створення яких конвеєр не дійшов, можуть бути відсутні;
+позитивні докази для невиконаних кроків не генеруються.
+
+### Вартість
+
+cost-gate-bypass-label: cost-approved
+
+[src/mapping.ts](src/mapping.ts) оцінює місячну вартість запитаних ресурсів
+Deployment: replicas × 730 годин × (vCPU × $0.04048 + GiB × $0.004445).
+Це ставки AWS Fargate Linux/x86 us-east-1 on-demand:
+https://aws.amazon.com/fargate/pricing/ . Для kind це порівняльна оцінка
+виділених ресурсів, рахунку за локальний кластер немає.
+
+CI робить preview базової і поточної Pulumi-програм з однаковою конфігурацією
+на порожньому файловому стеку; ціна обчислюється з ресурсів, не з хешу плану.
+Гейт блокує **збільшення** понад $10/місяць. Незмінна дорога інфраструктура
+не блокується. Лейбл `cost-approved` дозволяє явний обхід, який видно в лозі
+як bypass=1. Лише користувачі з правом керувати лейблами мають давати схвалення.
+Локально без `BASE_PLAN_JSON` базова ціна дорівнює нулю: це дозволяє грейдеру
+перевірити артефакт бюджетами 0 і 999999. Невідомий/порожній план або невідомі
+одиниці ресурсів завершують гейт помилкою, а не нульовою оцінкою.
+
 ## Grading
+
+ДЗ #32 (гілка `hw-32`), Node 22, Docker daemon; локальні демо не потребують
+GitHub, хмари чи Kubernetes. Для oasdiff потрібен `.bin/oasdiff` або Docker.
+
+```bash
+git clone https://github.com/AndreyKarpenko/robot_dreams.git
+cd robot_dreams
+git checkout hw-32
+npm ci
+bash scripts/install-ci-tools.sh  # oasdiff + actionlint, перевірка SHA256
+export SKIP_VAULT=1
+export APP_DB_PASSWORD=grader-secret
+npm run demo:gates
+npm run demo:oidc
+PLAN_JSON=/tmp/hw32/plan.json COST_BUDGET_USD=0 npm run gate:cost       # fail
+PLAN_JSON=/tmp/hw32/plan.json COST_BUDGET_USD=999999 npm run gate:cost  # pass
+.bin/actionlint -shellcheck=''
+```
+
+plan.json береться з pipeline-evidence реального GitHub прогону, у git його немає.
+Нижче лишаються команди перевірки попередніх ДЗ.
+
 
 hw-29. Стек спостережуваності — `observability/compose.yaml`, Postgres — `db` з кореневого compose. Креденшели Grafana експортуються **до** `compose up`: compose підставляє їх у контейнер і без них зупиняється з назвою змінної. JWT-ключі й `STREAM_TOKEN_SECRET` потрібні, бо демо проходять справжній `POST /orders` під гардом. `package.json` лежить у корені, окремий `cd` не потрібен.
 
