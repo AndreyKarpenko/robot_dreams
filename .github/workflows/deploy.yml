@@ -1,0 +1,29 @@
+name: Deploy main
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch the same gated build and deployment on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh workflow run ci.yml --repo "$GH_REPO" --ref main --field "deployment-request=$GITHUB_RUN_ID"
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id=$(gh run list --repo "$GH_REPO" --workflow ci.yml --branch main --event workflow_dispatch --json databaseId,displayTitle --jq ".[] | select(.displayTitle == \"pipeline-$GITHUB_RUN_ID\") | .databaseId" | head -1)
+            if [ -n "$run_id" ]; then break; fi
+            sleep 2
+          done
+          test -n "$run_id"
+          gh run watch "$run_id" --repo "$GH_REPO" --exit-status --interval 10
