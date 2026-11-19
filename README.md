@@ -1,3 +1,84 @@
+## AWS
+
+смуга: запасна (LocalStack)
+
+teardown-run: pending — справжній dispatch-прогін ще не виконано.
+
+Регіон: eu-central-1; додаткова перевірка: us-east-1. Програми: `infra/base`, `infra/demo`; npm-скрипти: кореневий `package.json`. Смугу оголошено до першого розгортання HW31.
+
+Це локальна смуга без AWS-акаунта. Workflow підіймає окремий LocalStack, відтворює стенд і зносить його в тому самому job; він не зносить ресурси на ноутбуці. AWS OIDC-роль описана як навчальний документ; CI цієї смуги не отримує AWS-креденшели й не використовує AWS Secrets. `id-token: write` зарезервовано для основної смуги. Це не доказ автентифікації в AWS.
+
+Запуск (Docker, Node 24, Pulumi 3.273.0; AWS CLI використовується всередині контейнера):
+
+```bash
+npm ci --prefix infra/base
+npm ci --prefix infra/demo
+export SKIP_VAULT=1 # лише для локального емулятора: секретів AWS немає
+npm run hw31:start
+npm run up:base
+npm run hw31:verify
+npm run hw31:iam
+npm run demo:nat # preview із NAT, реальний 501 і повернення прапорця
+# demo:alb та demo:failover також збирають preview/501 цієї смуги
+npm run hw31:teardown
+docker compose -f infra/hw31/compose.yaml down -v
+```
+
+Не запускайте з реальними AWS endpoints. Усі endpoint-и й тестові ключі зафіксовані в `Pulumi.local.yaml`. Стан та Pulumi home ізольовані у `.pulumi/hw31/`; глобальні `aws configure` і `pulumi login` не потрібні. Після `destroy` стек зберігається для `stack export`. На запасній смузі file backend дозволений: на відміну від основної смуги CI створює і зносить власний локальний стенд. На #28 стан теж був локальним; для справжнього AWS потрібен спільний Pulumi Cloud або S3 backend, доступний з CI.
+
+LocalStack цю IAM-політику не застосовує. Я не перевіряю коректність заборон локально, бо перевірити її локально неможливо. `evidence/localstack-iam.txt` показує протилежне: explicit Deny не блокує запис, а вигаданий ключ читає об’єкт. Вивід `simulate-principal-policy` на AWS відсутній, бо AWS-акаунта немає; локальну симуляцію не видаємо за AWS-тест. Trust звужено до цього репозиторію та гілки `hw-31`; перевірка aud — `sts.amazonaws.com`.
+
+Фактичний текст 501 у цьому образі: `not included in your current license plan or has not yet been emulated by LocalStack`, а не `not included within your LocalStack license` з умови. `evidence/501.txt` містить оригінальний вивід; literal grep з умови для іншого формулювання не збігатиметься. Скрипт приймає обидва формулювання лише разом зі справжнім StatusCode 501.
+
+LocalStack жорстко зафіксовано на `4.14.0`, порт `23166`, без auth token. Ціна піна: «pinning to a prior version will opt you out of any future updates or security patches». `ENFORCE_IAM=1` не робить цей стенд перевіркою IAM. RDS, ALB і NAT в цій смузі не дають вимірів AWS; їхні runtime-демо не можна подавати як реальні failover, health або білінг. `preview` теж може звертатися до provider API (refresh, invokes та перевірки); твердження, що він гарантовано не ходить у мережу, некоректне.
+
+Лише локальний конфіг `infra/demo/Pulumi.local.yaml` вмикає `hw31:skipLocalLambda`: LocalStack не може запустити Lambda без Docker, а provider вимагає від `TargetGroupAttachment` відому `target_id` уже під час preview, коли ARN Lambda ще невідомий. Тому в локальній смузі описані RDS, ALB і target group, але Lambda не розгортається; у звичайному конфігу AWS створюються і Lambda, і attachment. Це не є доказом робочого ALB.
+
+RDS Multi-AZ проти мого стека з #15: RDS бере на себе PostgreSQL primary/standby, реплікацію, кероване перемикання, шифрування сховища та щоденні резервні копії з retention 1 день. Standby не є read replica. PgBouncer/пул з’єднань, повторні підключення після failover, міграції, SQL, користувачі й права, перевірка restore та потрібний довгостроковий експорт із `backup.sh` залишаються моєю відповідальністю. Керований `--force-failover` вимірює процедуру, а не справжній інцидент.
+
+KMS — шар під сховищем секретів із #11: ключ KMS може шифрувати `ENCRYPTION_KEY`, але не замінює Infisical, ротацію чи контроль доступу. Власний customer-managed key тут не створюється. Для локальної бази пароль публічний тестовий; реальні секрети мають надходити з наявного Infisical через `scripts/with-secrets.sh`, без нових env-файлів.
+
+Community LocalStack повернув InternalFailure для Budgets: API не включено в ліцензію або не емульовано. Тому `hw31:skipUnsupportedBudget: true` пропускає створення бюджету лише в локальному конфізі; це не розгорнутий алерт. Визначення бюджету залишається першим ресурсом програми й залежністю VPC при ввімкненні. Бюджет у коді — $5/місяць, ACTUAL >20%, без фільтра тегів. Email `student@example.com` є локальним прикладом, не працюючим алертом. Лист не зупиняє витрати: при лагу 12 год за ставкою завдання це близько $0.98. Base не містить погодинних ресурсів; приватні route tables не мають default route на IGW. NAT існує тільки за `hw31:withNat=true` у demo, без зміни приватних маршрутів.
+
+Орієнтир вартості eu-central-1 (730 год/місяць). Наведені нижче ставки взято **з умови завдання**, знімок 24.08.2026; я не перевіряв поточні прайс-листи AWS особисто, тому це не власний актуальний кошторис:
+
+| Позиція | Розрахунок | USD/місяць |
+|---|---|---:|
+| ALB | 0.027 × 730 | 19.71 |
+| RDS db.t4g.micro Multi-AZ instance | 0.037 × 730 | 27.01 |
+| gp3 Multi-AZ 20 GiB | 0.274 × 20 | 5.48 |
+| Public IPv4 ALB ×2 | 0.005 × 2 × 730 | 7.30 |
+| LCU, припущення навчального трафіку | оцінка з умови | 0.29 |
+| Разом | 59.79 / 730 = 0.081904 USD/год | 59.79 |
+
+Lambda запити/виконання та трафік залежать від використання й не включені в цю оцінку. NAT-вправа: мінімум $0.052 + $0.005 = $0.057; ALB і NAT округлюють неповну годину вгору, RDS — посекундно з мінімумом 10 хвилин. У LocalStack ці суми не нараховуються.
+
+Навчальна permission policy (не production-ready AWS teardown policy; LocalStack її не застосовує). У `Action` немає wildcard; `Resource: "*"` потрібен для list/describe та поки що використаний для навчальних delete-дозволів з умовою тегу. Реальний AWS потребує сервісних ARN, перевірки підтримки condition keys і read-дозволів провайдера перед використанням:
+
+| Дозвіл | Для чого |
+|---|---|
+| ec2:DescribeVpcs | Перевірити VPC |
+| ec2:DescribeSubnets | Перевірити кількість та AZ підмереж |
+| ec2:DescribeRouteTables | Перевірити приватні маршрути |
+| ec2:DescribeSecurityGroups | Перевірити SG |
+| ec2:DescribeNatGateways | Порахувати залишені NAT |
+| ec2:DescribeAddresses | Порахувати EIP |
+| rds:DescribeDBInstances | Порахувати RDS |
+| elasticloadbalancing:DescribeLoadBalancers | Порахувати ALB |
+| tag:GetResources | Знайти ресурси за Project |
+| rds:DeleteDBInstance | Знести demo БД |
+| rds:DeleteDBSubnetGroup | Знести subnet group БД |
+| elasticloadbalancing:DeleteLoadBalancer | Знести ALB |
+| elasticloadbalancing:DeleteListener | Знести HTTP listener |
+| elasticloadbalancing:DeleteTargetGroup | Знести target group |
+| elasticloadbalancing:DeregisterTargets | Вилучити Lambda із target group |
+| ec2:DeleteNatGateway | Знести NAT-вправу |
+| ec2:ReleaseAddress | Вивільнити NAT EIP |
+| lambda:DeleteFunction | Знести HTTP target |
+| lambda:RemovePermission | Вилучити дозвіл виклику ALB |
+
+Справжнього teardown-run поки немає: GitHub CLI на машині не авторизований. Після push гілки workflow треба запустити через `workflow_dispatch`, перевірити артефакти та поставити посилання на цей прогін у `teardown-run` вище. Локальні evidence не замінюють чужий CI-лог. Перевірки виконуються по двох регіонах. Якщо ліцензія блокує RDS або ALB describe, у CI друкується `check-unavailable`, відповідний ключ вилучається з контракту: відмова не є нулем. Решта помилок зупиняє перевірку. Для запасної смуги обов’язковий `state-resources-left=0`; шість нулів основної смуги цей запуск не засвідчує. Schedule працюватиме лише після появи workflow у default branch GitHub; до того доступний dispatch для гілки з workflow.
+
 <p align="center">
   <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>

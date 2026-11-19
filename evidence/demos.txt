@@ -1,0 +1,4 @@
+state-resources-left=0
+tagged-resources-left=0
+nat-left=0
+eip-left=0

@@ -73,6 +73,18 @@ pids
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
-# HW32 local/runner evidence
-/evidence/
+# HW31 dependencies and local state
+infra/base/node_modules/
+infra/demo/node_modules/
+!evidence/
+evidence/*
+!evidence/hw31-status.md
+!evidence/base.txt
+!evidence/base-state.json
+!evidence/iam.json
+!evidence/localstack-iam.txt
+!evidence/preview-demo.txt
+!evidence/501.txt
+!evidence/demos.txt
+!evidence/localstack-iam.log
 /src/gate-fixtures/
