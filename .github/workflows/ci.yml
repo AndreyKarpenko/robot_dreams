@@ -1,108 +1,181 @@
-name: CI
-
+name: PR gates and promotion
+run-name: pipeline-${{ inputs.deployment-request || github.event.pull_request.number || github.run_id }}
 on:
-  push:
   pull_request:
-
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      deployment-request:
+        description: Correlation ID for the main deployment dispatcher
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: pipeline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
-  test:
+  quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
-      - run: npx tsc --noEmit
-      - run: npm run test:integration
-      - run: npm run test:e2e
-      - run: npm run test:contract
-
-  image-scan:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - uses: ./.github/actions/pipeline
+      - run: actionlint -shellcheck=''
+      - run: npm run gate:types
+      - run: npm run gate:architecture
+      - name: Compare public API with PR base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: |
+          git show "$BASE_SHA:openapi/openapi.yaml" > /tmp/base-openapi.yaml
+          CONTRACT_BASE=/tmp/base-openapi.yaml npm run gate:contract
+      - run: npm run demo:oidc
+      - run: npm run test:contract -- --silent
+  build:
+    needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+      image-ref: ${{ steps.ref.outputs.image-ref }}
+      repository: ${{ steps.ref.outputs.repository }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          node-version: '22'
-      - name: Build production image
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: ./.github/actions/pipeline
+      - id: ref
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.sha }}
         run: |
-          printf 'ci-npm-token' > .npm_token
-          npm run image:build
-      - name: Install Trivy
+          repository="ghcr.io/${REPOSITORY,,}"
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+          echo "image-ref=$repository:$TAG" >> "$GITHUB_OUTPUT"
+          mkdir -p evidence
+          openssl rand -hex 24 > .npm_token
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Record build invocation
+        run: echo build >> evidence/build.log
+      - id: image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          tags: ${{ steps.ref.outputs.image-ref }}
+          secret-files: npm_token=.npm_token
+      - name: Scan exactly the published digest
+        env:
+          SCAN_IMAGE: ${{ steps.ref.outputs.repository }}@${{ steps.image.outputs.digest }}
         run: |
-          mkdir -p "$HOME/.local/bin"
-          VER=0.76.1
-          curl -fsSL \
-            "https://github.com/aquasecurity/trivy/releases/download/v${VER}/trivy_${VER}_Linux-64bit.tar.gz" \
-            | tar -xz -C "$HOME/.local/bin" trivy
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          trivy --version
-      - name: Scan image (computed threshold)
-        run: SCAN_MAX=100 npm run scan
-
-  contract:
+          docker pull "$SCAN_IMAGE"
+          set +e
+          npm run scan
+          code=$?
+          echo "gate-scan-exit=$code" > evidence/scan.txt
+          exit "$code"
+      - name: Exercise all four gates in both directions
+        env:
+          SCAN_IMAGE: ${{ steps.ref.outputs.repository }}@${{ steps.image.outputs.digest }}
+        run: npm run demo:gates
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: build-evidence
+          path: evidence/
+          include-hidden-files: false
+  deploy:
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: ci-kind
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     env:
-      PACT_BROKER_URL: ${{ secrets.PACT_BROKER_URL }}
-      PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
-      PACT_CONSUMER_VERSION: '1.0.0'
-      PACT_PROVIDER_VERSION: '1.0.0'
+      IMAGE_REPOSITORY: ${{ needs.build.outputs.repository }}
+      IMAGE_REF: ${{ needs.build.outputs.image-ref }}
+      BUILT_DIGEST: ${{ needs.build.outputs.digest }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+      COST_APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'cost-approved') && '1' || '0' }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
-      - name: Start Pact Broker
-        run: docker compose up -d --wait pact-broker
-      - name: Generate contract
-        run: npm run test:contract
-      - name: Publish contract
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Initialize evidence
         run: |
-          : "${PACT_BROKER_URL:=http://127.0.0.1:9292}"
-          AUTH=()
-          if [ -n "${PACT_BROKER_TOKEN:-}" ]; then
-            AUTH=(-H "Authorization: Bearer ${PACT_BROKER_TOKEN}")
-          fi
-          code=$(curl -sS -o /tmp/pact-publish.json -w "%{http_code}" \
-            -X PUT \
-            "${AUTH[@]}" \
-            -H "Content-Type: application/json" \
-            --data-binary @pacts/MarketplaceWeb-MarketplaceAPI.json \
-            "${PACT_BROKER_URL}/pacts/provider/MarketplaceAPI/consumer/MarketplaceWeb/version/${PACT_CONSUMER_VERSION}")
-          cat /tmp/pact-publish.json
-          test "$code" = "201" || test "$code" = "200"
-      - name: Verify provider
+          mkdir -p evidence
+          printf 'run-id=%s\nhead-sha=%s\nimage-ref=%s\nbuilt-digest=%s\n' "$GITHUB_RUN_ID" "$HEAD_SHA" "$IMAGE_REF" "$BUILT_DIGEST" > evidence/evidence.txt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: build-evidence
+          path: evidence
+      - uses: ./.github/actions/pipeline
+        with:
+          infrastructure: 'true'
+      - name: Verify GitHub OIDC signature and repository policy
+        env:
+          EVIDENCE_FILE: evidence/evidence.txt
+        run: node scripts/oidc-gate.mjs
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deploy through Pulumi and enforce zero failed responses
+        env:
+          SKIP_VAULT: '1'
+          APP_DB_PASSWORD: ${{ secrets.APP_DB_PASSWORD }}
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+        run: bash scripts/with-secrets.sh dev bash scripts/ci-deploy.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: deployment-evidence
+          path: evidence/
+          if-no-files-found: error
+      - name: Remove ephemeral cluster
+        if: always()
+        run: npm run cluster:down
+
+  evidence:
+    if: always()
+    needs: [quality, build, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Initialize partial evidence for failed runs
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          : "${PACT_BROKER_URL:=http://127.0.0.1:9292}"
-          export PACT_BROKER_URL
-          npm run verify:provider
-      - name: Tag provider version as prod
-        run: |
-          : "${PACT_BROKER_URL:=http://127.0.0.1:9292}"
-          AUTH=()
-          if [ -n "${PACT_BROKER_TOKEN:-}" ]; then
-            AUTH=(-H "Authorization: Bearer ${PACT_BROKER_TOKEN}")
-          fi
-          curl -fsS -X PUT \
-            "${AUTH[@]}" \
-            -H "Content-Type: application/json" \
-            -d '{}' \
-            "${PACT_BROKER_URL}/pacticipants/MarketplaceAPI/versions/${PACT_PROVIDER_VERSION}/tags/prod"
-      - name: can-i-deploy
-        run: |
-          : "${PACT_BROKER_URL:=http://127.0.0.1:9292}"
-          AUTH=()
-          if [ -n "${PACT_BROKER_TOKEN:-}" ]; then
-            AUTH=(-H "Authorization: Bearer ${PACT_BROKER_TOKEN}")
-          fi
-          body=$(curl -fsS "${AUTH[@]}" \
-            "${PACT_BROKER_URL}/can-i-deploy?pacticipant=MarketplaceWeb&version=${PACT_CONSUMER_VERSION}&to=prod")
-          echo "$body"
-          python3 -c 'import json,sys; d=json.load(sys.stdin); s=d.get("summary", d); raise SystemExit(0 if s.get("deployable") is True else 1)' <<<"$body"
+          mkdir -p evidence
+          printf 'run-id=%s\nhead-sha=%s\n' "$GITHUB_RUN_ID" "$HEAD_SHA" > evidence/evidence.txt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: '*-evidence'
+          merge-multiple: true
+          path: evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: pipeline-evidence
+          path: evidence/
+          if-no-files-found: error

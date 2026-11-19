@@ -13,7 +13,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { OrderStatus } from './dto/update-order-status.dto';
 import { OrderEventsService } from './order-events.service';
 import { OrderRow, OrdersRepository } from './orders.repository';
-import { ProductsRepository } from '../products/products.repository';
+import { ProductsRepository } from '../products';
 import { toOrderPlacedEvent } from '../broker/order-placed';
 import {
   findIdempotentOrderId,

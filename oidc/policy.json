@@ -1,0 +1,8 @@
+{
+  "iss": "https://token.actions.githubusercontent.com",
+  "aud": "robot-dreams-deploy",
+  "subjects": [
+    "repo:AndreyKarpenko/robot_dreams:environment:ci-kind",
+    "repo:AndreyKarpenko@25724770/robot_dreams@1320081397:environment:ci-kind"
+  ]
+}

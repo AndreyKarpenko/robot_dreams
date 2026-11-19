@@ -87,3 +87,4 @@ evidence/*
 !evidence/501.txt
 !evidence/demos.txt
 !evidence/localstack-iam.log
+/src/gate-fixtures/

@@ -49,7 +49,7 @@ const appSecret = new k8s.core.v1.Secret(
     },
     type: 'Opaque',
     data: {
-      APP_DB_PASSWORD: Buffer.from(appDbPassword, 'utf8').toString('base64'),
+      APP_DB_PASSWORD: pulumi.secret(Buffer.from(appDbPassword, 'utf8').toString('base64')),
     },
   },
   { dependsOn: [ns] },

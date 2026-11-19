@@ -13,7 +13,7 @@ ENV_SLUG="${1:-dev}"; shift || true
 if [ "${SKIP_VAULT:-0}" = "1" ]; then exec "$@"; fi
 
 CREDS="$ROOT/.secrets/infisical.env"
-if [ ! -f "$CREDS" ]; then
+if [ -z "${INFISICAL_TOKEN:-}" ] && [ ! -f "$CREDS" ]; then
   echo "Missing Infisical credentials at $CREDS." >&2
   echo "Please either run infisical init to connect to a project or create that file." >&2
   exit 1
@@ -21,7 +21,7 @@ fi
 
 set -a
 # shellcheck disable=SC1090
-source "$CREDS"
+if [ -f "$CREDS" ]; then source "$CREDS"; fi
 set +a
 
 if ! command -v infisical >/dev/null 2>&1; then
@@ -30,4 +30,6 @@ if ! command -v infisical >/dev/null 2>&1; then
   exit 1
 fi
 
-exec infisical run --env="$ENV_SLUG" -- "$@"
+ARGS=(run --env="$ENV_SLUG")
+if [ -n "${INFISICAL_PROJECT_ID:-}" ]; then ARGS+=(--projectId="$INFISICAL_PROJECT_ID"); fi
+exec infisical "${ARGS[@]}" -- "$@"

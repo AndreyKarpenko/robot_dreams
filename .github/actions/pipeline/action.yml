@@ -1,0 +1,28 @@
+name: Project toolchain
+description: Install locked Node dependencies and infrastructure tools
+inputs:
+  infrastructure:
+    description: Install kind and Pulumi for the deployment job
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      with:
+        node-version: '22'
+        cache: npm
+    - shell: bash
+      run: npm ci
+    - shell: bash
+      run: bash scripts/install-ci-tools.sh
+    - if: inputs.infrastructure == 'true'
+      shell: bash
+      run: |
+        npm ci --prefix infra
+        curl -fsSL https://get.pulumi.com -o /tmp/install-pulumi.sh
+        bash /tmp/install-pulumi.sh --version 3.273.0
+        echo "$HOME/.pulumi/bin" >> "$GITHUB_PATH"
+        curl -fsSL https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 -o .bin/kind
+        curl -fsSL https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64.sha256sum -o /tmp/kind.sha256
+        (cd .bin; sed 's/kind-linux-amd64/kind/' /tmp/kind.sha256 | sha256sum -c -)
+        chmod +x .bin/kind
